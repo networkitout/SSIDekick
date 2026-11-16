@@ -74,14 +74,16 @@ public struct TwinDetector: Sendable {
 
             // Weak signals need at least two siblings that all agree.
             if siblings.count >= 2 {
-                if let mine = own.countryCode, let agreed = Self.unanimous(siblings.map(\.countryCode)), agreed != mine {
-                    add(.countryMismatch, "Country \(mine), while \(others) named \(ssid) use \(agreed)")
+                if let agreed = Self.unanimous(siblings.map(\.countryCode)), agreed != own.countryCode {
+                    let mine = own.countryCode.map { "Country \($0)" } ?? "No country set"
+                    add(.countryMismatch, "\(mine), while \(others) named \(ssid) use \(agreed)")
                 }
                 if let agreed = Self.unanimous(siblings.map { Optional($0.beaconInterval) }), agreed != own.beaconInterval {
                     add(.beaconMismatch, "Beacon interval \(own.beaconInterval) ms, while \(others) named \(ssid) use \(agreed) ms")
                 }
-                if let mine = own.generation, let agreed = Self.unanimous(siblings.map(\.generation)), agreed != mine {
-                    add(.generationMismatch, "Wi-Fi \(mine.rawValue), while \(others) named \(ssid) use Wi-Fi \(agreed.rawValue)")
+                if let agreed = Self.unanimous(siblings.map(\.generation)), agreed != own.generation {
+                    let mine = own.generation.map { "Wi-Fi \($0.rawValue)" } ?? "No Wi-Fi generation reported"
+                    add(.generationMismatch, "\(mine), while \(others) named \(ssid) use Wi-Fi \(agreed.rawValue)")
                 }
             }
         }

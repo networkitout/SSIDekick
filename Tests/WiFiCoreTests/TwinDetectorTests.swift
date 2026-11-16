@@ -76,6 +76,18 @@ private extension String { func leftPad() -> String { count < 2 ? "0" + self : s
         let split = [ap("Corp", acme(1)), ap("Corp", acme(2), gen: .wifi5), ap("Corp", acme(3), gen: .wifi4)]
         #expect(detector.findings(in: split).isEmpty)
     }
+    @Test func nilCountryTwinAmongUnanimousSiblings() {
+        let scan = [ap("Corp", acme(1)), ap("Corp", acme(2)), ap("Corp", acme(3), cc: nil)]
+        let found = detector.findings(in: scan)
+        #expect(found.map(\.signal) == [.countryMismatch])
+        #expect(found.first?.reason == "No country set, while 2 others named Corp use US")
+    }
+    @Test func nilGenerationTwinAmongUnanimousSiblings() {
+        let scan = [ap("Corp", acme(1)), ap("Corp", acme(2)), ap("Corp", acme(3), gen: nil)]
+        let found = detector.findings(in: scan)
+        #expect(found.map(\.signal) == [.generationMismatch])
+        #expect(found.first?.reason == "No Wi-Fi generation reported, while 2 others named Corp use Wi-Fi 6")
+    }
     @Test func hiddenAndNamelessSkipped() {
         let scan = [
             ap(nil, acme(1)), ap(nil, acme(2), sec: [.open]),
