@@ -21,16 +21,18 @@ public final class Engine {
     public var settings: EngineSettings {
         didSet {
             if !settings.publicIPEnabled { snapshot.connectivity.publicIP = nil }
-            if settings.scanInterval != oldValue.scanInterval, tasks.isRunning { startTimers() }
+            if settings.scanInterval != oldValue.scanInterval, tasks.isRunning { startScanLoop() }
         }
     }
 
-    /// Setting true refreshes the public IP; opening or closing the menu also changes the refresh cadence.
+    /// Setting true refreshes the public IP and cuts short the link and probe waits, so the faster
+    /// menu-open cadence applies at once. It never restarts a loop, cancels a refresh or touches the scan countdown.
     public var menuOpen = false {
         didSet {
-            guard menuOpen != oldValue else { return }
-            if tasks.isRunning { startTimers() }
-            if menuOpen { Task { await refreshPublicIP() } }
+            guard menuOpen, !oldValue else { return }
+            linkNap.wake()
+            probeNap.wake()
+            Task { await refreshPublicIP() }
         }
     }
 
@@ -48,11 +50,18 @@ public final class Engine {
     @ObservationIgnored private var monitor = ConnectionMonitor()
     @ObservationIgnored private var ledger = NotificationLedger()
     @ObservationIgnored private var lossWindow = LossWindow()
-    @ObservationIgnored private var sessionID = 0
+    /// The network name of the current session as the Engine sees it; nil when there is none.
+    @ObservationIgnored private var sessionName: String?
+    /// Changes whenever a session ends or starts; probe and public-IP results from an older epoch are dropped.
+    @ObservationIgnored private var connectionEpoch = 0
+    /// True from a session change until a probe for the new session completes.
+    @ObservationIgnored private var probesStale = false
     @ObservationIgnored private var scanning = false
     @ObservationIgnored private var probing = false
     @ObservationIgnored private var fetchingPublicIP = false
     @ObservationIgnored private let tasks = TaskBag()
+    @ObservationIgnored private let linkNap = Nap()
+    @ObservationIgnored private let probeNap = Nap()
 
     public init(wifi: WiFiSource, config: NetworkConfigSource, neighbors: NeighborSource, prober: Prober,
                 location: LocationAuthorizing, vendors: VendorLookup, settings: EngineSettings,
@@ -76,7 +85,8 @@ public final class Engine {
         snapshot.scan = wifi.cachedScan()
         refreshLink()
         tasks.isRunning = true
-        startTimers()
+        startLinkAndProbeLoops()
+        startScanLoop()
         startEventLoops()
     }
 
@@ -85,19 +95,29 @@ public final class Engine {
         tasks.cancelAll()
     }
 
-    private func startTimers() {
+    /// How many times each loop has been started.
+    var loopStarts: [String: Int] { tasks.starts }
+
+    /// The link and probe loops re-read their cadence after every tick, so they are started only once.
+    private func startLinkAndProbeLoops() {
+        let linkNap = linkNap
         tasks.replace("link", with: Task { [weak self] in
             while true {
                 guard let interval = self?.linkTick() else { return }
-                do { try await Task.sleep(for: .seconds(interval)) } catch { return }
+                guard await linkNap.sleep(interval) else { return }
             }
         })
+        let probeNap = probeNap
         tasks.replace("probes", with: Task { [weak self] in
             while true {
                 guard let interval = await self?.probeTick() else { return }
-                do { try await Task.sleep(for: .seconds(interval)) } catch { return }
+                guard await probeNap.sleep(interval) else { return }
             }
         })
+    }
+
+    /// Restarted only when `settings.scanInterval` changes.
+    private func startScanLoop() {
         guard let interval = settings.scanInterval else {
             tasks.replace("scan", with: nil)
             return
@@ -116,7 +136,7 @@ public final class Engine {
         tasks.replace("wifiEvents", with: Task { [weak self] in
             for await event in events {
                 guard let self else { return }
-                self.refreshLink()
+                _ = self.linkTick()
                 switch event {
                 case .ssidChanged, .bssidChanged: await self.scanNow()
                 case .powerChanged, .linkChanged: break
@@ -134,13 +154,15 @@ public final class Engine {
         tasks.replace("locationChanges", with: Task { [weak self] in
             for await _ in locationChanges {
                 guard let self else { return }
-                self.refreshLink()
+                _ = self.linkTick()
             }
         })
     }
 
+    /// Refreshes the link and, after a session change, starts a probe for the new network without waiting for it.
     private func linkTick() -> TimeInterval {
         refreshLink()
+        if probesStale { Task { await refreshProbes() } }
         return Cadence.linkInterval(menuOpen: menuOpen)
     }
 
@@ -165,21 +187,28 @@ public final class Engine {
         probing = true
         defer { probing = false }
 
+        let epoch = connectionEpoch
         let current = config.current()
         var gatewayMAC: MACAddress?
         var gatewayLatency: Double?
-        var gatewayLoss: Int?
         if let gateway = current.gatewayIP {
             gatewayMAC = await neighbors.hardwareAddress(forIPv4: gateway)
             gatewayLatency = await prober.ping(gateway)
-            lossWindow.record(success: gatewayLatency != nil)
-            gatewayLoss = lossWindow.lossPercent
         }
         var dnsLatency: Double?
         if let server = current.dnsServers.first {
             dnsLatency = await prober.dnsLatency(server: server)
         }
         let internet = await prober.internetCheck()
+
+        // The session changed while probing: these results describe the previous network.
+        guard epoch == connectionEpoch else { return }
+        probesStale = false
+        var gatewayLoss: Int?
+        if current.gatewayIP != nil {
+            lossWindow.record(success: gatewayLatency != nil)
+            gatewayLoss = lossWindow.lossPercent
+        }
 
         snapshot.connectivity.gatewayIP = current.gatewayIP
         snapshot.connectivity.gatewayMAC = gatewayMAC
@@ -199,10 +228,10 @@ public final class Engine {
         guard settings.publicIPEnabled, snapshot.connectivity.publicIP == nil, !fetchingPublicIP else { return }
         fetchingPublicIP = true
         defer { fetchingPublicIP = false }
-        let session = sessionID
+        let epoch = connectionEpoch
         let address = await prober.publicIP()
         // Drop a stale answer if the session changed or the setting was turned off meanwhile.
-        guard session == sessionID, settings.publicIPEnabled else { return }
+        guard epoch == connectionEpoch, settings.publicIPEnabled else { return }
         snapshot.connectivity.publicIP = address
         recompute(completedScan: nil)
     }
@@ -228,8 +257,20 @@ public final class Engine {
 
     /// completedScan: the result of a full scan that just finished, else nil.
     private func recompute(completedScan: [AccessPoint]?) {
+        // Mirrors ConnectionMonitor's session rule (nil ends a session, a new name starts one), but runs first,
+        // so values measured on the previous network never become the new session's baseline.
+        let link = snapshot.locationAuthorized ? snapshot.link : nil
+        let name = link?.bssid == nil ? nil : link?.ssid
+        if name != sessionName {
+            sessionName = name
+            connectionEpoch += 1
+            snapshot.connectivity = ConnectivitySnapshot()
+            lossWindow = LossWindow()
+            probesStale = true
+        }
+
         var connection: ConnectionState?
-        if snapshot.locationAuthorized, let link = snapshot.link, let name = link.ssid, let address = link.bssid {
+        if let link, let name, let address = link.bssid {
             connection = ConnectionState(ssid: name, bssid: address, rssi: link.rssi,
                                          gatewayMAC: snapshot.connectivity.gatewayMAC,
                                          dnsServers: snapshot.connectivity.dnsServers)
@@ -239,12 +280,6 @@ public final class Engine {
             connection: connection, scan: completedScan,
             siblingFindings: siblingFindings.filter { $0.ssid == connection?.ssid },
             now: now())
-
-        if monitor.sessionID != sessionID {
-            sessionID = monitor.sessionID
-            snapshot.connectivity.publicIP = nil
-            lossWindow = LossWindow()
-        }
 
         guard snapshot.locationAuthorized else {
             snapshot.findings = []
@@ -260,14 +295,38 @@ public final class Engine {
     }
 }
 
+/// A sleep that `wake()` can cut short without cancelling the task that sleeps.
+@MainActor
+private final class Nap {
+    private var sleeper: Task<Void, Never>?
+
+    /// Sleeps for `seconds` or until woken. Returns false when the calling task was cancelled.
+    func sleep(_ seconds: TimeInterval) async -> Bool {
+        let sleeper = Task<Void, Never> { try? await Task.sleep(for: .seconds(seconds)) }
+        self.sleeper = sleeper
+        await withTaskCancellationHandler {
+            await sleeper.value
+        } onCancel: {
+            sleeper.cancel()
+        }
+        if self.sleeper == sleeper { self.sleeper = nil }
+        return !Task.isCancelled
+    }
+
+    func wake() { sleeper?.cancel() }
+}
+
 /// Owns the Engine's long-running tasks and cancels them when replaced, stopped or released.
 private final class TaskBag {
     var isRunning = false
     private var tasks: [String: Task<Void, Never>] = [:]
+    /// How many times each loop has been started; lets tests check which changes restart which loops.
+    private(set) var starts: [String: Int] = [:]
 
     func replace(_ key: String, with task: Task<Void, Never>?) {
         tasks[key]?.cancel()
         tasks[key] = task
+        if task != nil { starts[key, default: 0] += 1 }
     }
 
     func cancelAll() {

@@ -41,8 +41,11 @@ private final class FakeConfig: NetworkConfigSource {
 
 private final class FakeNeighbors: NeighborSource {
     var answers: [MACAddress?] = []
+    /// Runs while the lookup is suspended, before it answers.
+    var duringLookup: (() async -> Void)?
     func hardwareAddress(forIPv4 ip: String) async -> MACAddress? {
-        answers.isEmpty ? nil : answers.removeFirst()
+        if let duringLookup { await duringLookup() }
+        return answers.isEmpty ? nil : answers.removeFirst()
     }
 }
 
@@ -64,6 +67,10 @@ private final class FakeLocation: LocationAuthorizing {
 
 private let t0 = Date(timeIntervalSince1970: 1_000_000)
 
+private final class Clock {
+    var date = t0
+}
+
 @MainActor
 private final class Recorder {
     var calls: [[Finding]] = []
@@ -73,9 +80,9 @@ private final class Recorder {
 private func makeEngine(wifi: FakeWiFi = FakeWiFi(), config: FakeConfig = FakeConfig(),
                         neighbors: FakeNeighbors = FakeNeighbors(), prober: FakeProber = FakeProber(),
                         location: FakeLocation = FakeLocation(),
-                        settings: EngineSettings = EngineSettings()) -> Engine {
+                        settings: EngineSettings = EngineSettings(), clock: Clock = Clock()) -> Engine {
     Engine(wifi: wifi, config: config, neighbors: neighbors, prober: prober, location: location,
-           vendors: VendorTable.empty, settings: settings, now: { t0 })
+           vendors: VendorTable.empty, settings: settings, now: { clock.date })
 }
 
 @MainActor
@@ -252,6 +259,123 @@ struct EngineTests {
         await engine.scanNow()
         #expect(engine.snapshot.findings.map(\.signal) == [.louderNewcomer])
         #expect(engine.snapshot.connectedVerdict == .worthALook)
+    }
+
+    @Test func networkSwitchDoesNotCarryGatewayBaseline() async {
+        let wifi = FakeWiFi()
+        let neighbors = FakeNeighbors()
+        neighbors.answers = [mac("00:0b:86:aa:00:01"), mac("00:14:6c:aa:00:02")]
+        let recorder = Recorder()
+        let engine = makeEngine(wifi: wifi, neighbors: neighbors)
+        engine.onNewFindings = { recorder.calls.append($0) }
+        engine.refreshLink()
+        await engine.refreshProbes()
+        wifi.link = makeLink("Home", "00:14:6c:00:00:01")
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectedVerdict == .clear)
+        #expect(engine.snapshot.findings.isEmpty)
+        #expect(recorder.calls.isEmpty)
+    }
+
+    @Test func networkSwitchClearsOldConnectivity() async {
+        let wifi = FakeWiFi()
+        let neighbors = FakeNeighbors()
+        neighbors.answers = [mac("00:0b:86:aa:00:01")]
+        let engine = makeEngine(wifi: wifi, neighbors: neighbors)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        wifi.link = makeLink("Home", "00:14:6c:00:00:01")
+        engine.refreshLink()
+        let c = engine.snapshot.connectivity
+        #expect(c.gatewayMAC == nil)
+        #expect(c.gatewayLatencyMs == nil)
+        #expect(c.gatewayLossPercent == nil)
+        #expect(c.dnsServers.isEmpty)
+        #expect(c.dnsLatencyMs == nil)
+        #expect(c.internet == .unknown)
+        #expect(c.internetLatencyMs == nil)
+    }
+
+    @Test func reconnectDoesNotCarryGatewayBaseline() async {
+        let wifi = FakeWiFi()
+        let neighbors = FakeNeighbors()
+        neighbors.answers = [mac("00:0b:86:aa:00:01"), mac("00:14:6c:aa:00:02")]
+        let engine = makeEngine(wifi: wifi, neighbors: neighbors)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        let corp = wifi.link
+        wifi.wifiState = .notConnected
+        wifi.link = nil
+        engine.refreshLink()
+        wifi.wifiState = .connected
+        wifi.link = corp
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectedVerdict == .clear)
+        #expect(engine.snapshot.findings.isEmpty)
+    }
+
+    @Test func networkSwitchDoesNotCarryDNSBaseline() async {
+        let wifi = FakeWiFi()
+        let config = FakeConfig()
+        config.config = NetworkConfig(gatewayIP: nil, dnsServers: ["10.20.0.53"], ipv4: [], ipv6: [])
+        let clock = Clock()
+        let engine = makeEngine(wifi: wifi, config: config, clock: clock)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        clock.date = t0 + 60
+        wifi.link = makeLink("Home", "00:14:6c:00:00:01")
+        config.config = NetworkConfig(gatewayIP: nil, dnsServers: ["192.168.1.1"], ipv4: [], ipv6: [])
+        engine.refreshLink()
+        clock.date = t0 + 90   // past the 10 s settle window, as with a 30 s probe interval
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectedVerdict == .clear)
+        #expect(engine.snapshot.findings.isEmpty)
+    }
+
+    @Test func probeResultFromOldSessionIsDiscarded() async {
+        let wifi = FakeWiFi()
+        let neighbors = FakeNeighbors()
+        neighbors.answers = [mac("00:0b:86:aa:00:01"), mac("00:14:6c:aa:00:02")]
+        let engine = makeEngine(wifi: wifi, neighbors: neighbors)
+        engine.refreshLink()
+        neighbors.duringLookup = {
+            await MainActor.run {
+                wifi.link = makeLink("Home", "00:14:6c:00:00:01")
+                engine.refreshLink()
+            }
+        }
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.gatewayMAC == nil)
+        neighbors.duringLookup = nil
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.gatewayMAC == mac("00:14:6c:aa:00:02"))
+        #expect(engine.snapshot.connectedVerdict == .clear)
+        #expect(engine.snapshot.findings.isEmpty)
+    }
+
+    @Test func menuToggleRestartsNoLoop() {
+        let engine = makeEngine()
+        engine.start()
+        defer { engine.stop() }
+        let before = engine.loopStarts
+        #expect(before["scan"] == 1 && before["probes"] == 1 && before["link"] == 1)
+        engine.menuOpen = true
+        engine.menuOpen = false
+        #expect(engine.loopStarts == before)
+    }
+
+    @Test func scanIntervalChangeRestartsOnlyScanLoop() {
+        let engine = makeEngine()
+        engine.start()
+        defer { engine.stop() }
+        var expected = engine.loopStarts
+        engine.settings.scanInterval = 30
+        expected["scan", default: 0] += 1
+        #expect(engine.loopStarts == expected)
+        engine.settings.publicIPEnabled = false
+        #expect(engine.loopStarts == expected)
     }
 
     @Test func everyDemoScenarioBuilds() {
