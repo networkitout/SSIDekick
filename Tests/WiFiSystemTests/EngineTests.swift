@@ -41,9 +41,11 @@ private final class FakeConfig: NetworkConfigSource {
 
 private final class FakeNeighbors: NeighborSource {
     var answers: [MACAddress?] = []
+    var lookups = 0
     /// Runs while the lookup is suspended, before it answers.
     var duringLookup: (() async -> Void)?
     func hardwareAddress(forIPv4 ip: String) async -> MACAddress? {
+        lookups += 1
         if let duringLookup { await duringLookup() }
         return answers.isEmpty ? nil : answers.removeFirst()
     }
@@ -52,7 +54,12 @@ private final class FakeNeighbors: NeighborSource {
 private final class FakeProber: Prober {
     var pingCount = 0
     var publicIPCount = 0
-    func ping(_ ip: String) async -> Double? { pingCount += 1; return 2 }
+    /// Answers for successive pings; 2 ms once they run out.
+    var pingResults: [Double?] = []
+    func ping(_ ip: String) async -> Double? {
+        pingCount += 1
+        return pingResults.isEmpty ? 2 : pingResults.removeFirst()
+    }
     func dnsLatency(server: String) async -> Double? { 10 }
     func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) { (.online, 30) }
     func publicIP() async -> String? { publicIPCount += 1; return "203.0.113.5" }
@@ -168,11 +175,13 @@ struct EngineTests {
         let neighbors = FakeNeighbors()
         neighbors.answers = [mac("00:14:6c:aa:00:01"), mac("00:14:6c:aa:00:02")]
         let recorder = Recorder()
-        let engine = makeEngine(neighbors: neighbors)
+        let clock = Clock()
+        let engine = makeEngine(neighbors: neighbors, clock: clock)
         engine.onNewFindings = { recorder.calls.append($0) }
         engine.refreshLink()
         await engine.refreshProbes()
         #expect(engine.snapshot.connectedVerdict == .clear)
+        clock.date = t0 + 30   // after the settle window
         await engine.refreshProbes()
         #expect(engine.snapshot.connectedVerdict == .suspect)
         #expect(engine.snapshot.findings.map(\.signal) == [.gatewayChanged])
@@ -353,6 +362,91 @@ struct EngineTests {
         #expect(engine.snapshot.connectivity.gatewayMAC == mac("00:14:6c:aa:00:02"))
         #expect(engine.snapshot.connectedVerdict == .clear)
         #expect(engine.snapshot.findings.isEmpty)
+    }
+
+    @Test func probeRequestDuringProbeRunsOnceMore() async {
+        let neighbors = FakeNeighbors()
+        let engine = makeEngine(neighbors: neighbors)
+        engine.refreshLink()
+        neighbors.duringLookup = {
+            neighbors.duringLookup = nil
+            // Two requests while the first probe is in flight coalesce into one rerun.
+            await engine.refreshProbes()
+            await engine.refreshProbes()
+        }
+        await engine.refreshProbes()
+        #expect(neighbors.lookups == 2)
+    }
+
+    @Test func configChangeDuringProbeCommitsFreshValues() async {
+        let config = FakeConfig()
+        let neighbors = FakeNeighbors()
+        neighbors.answers = [mac("00:0b:86:aa:00:01"), mac("00:14:6c:aa:00:02")]
+        let engine = makeEngine(config: config, neighbors: neighbors)
+        engine.refreshLink()
+        neighbors.duringLookup = {
+            neighbors.duringLookup = nil
+            config.config = NetworkConfig(gatewayIP: "10.0.0.1", dnsServers: ["10.0.0.53"], ipv4: ["10.0.0.7"], ipv6: [])
+            await engine.refreshProbes()   // what the config-change event does
+        }
+        await engine.refreshProbes()
+        let c = engine.snapshot.connectivity
+        #expect(c.gatewayIP == "10.0.0.1")
+        #expect(c.gatewayMAC == mac("00:14:6c:aa:00:02"))
+        #expect(c.dnsServers == ["10.0.0.53"])
+        #expect(c.ipv4 == ["10.0.0.7"])
+    }
+
+    @Test func probeWithStaleConfigCommitsNothing() async {
+        let config = FakeConfig()
+        let neighbors = FakeNeighbors()
+        neighbors.answers = [mac("00:0b:86:aa:00:01"), mac("00:14:6c:aa:00:02")]
+        let prober = FakeProber()
+        prober.pingResults = [nil, 2]   // the stale probe's ping is lost
+        let engine = makeEngine(config: config, neighbors: neighbors, prober: prober)
+        engine.refreshLink()
+        neighbors.duringLookup = {
+            neighbors.duringLookup = nil
+            config.config = NetworkConfig(gatewayIP: "10.0.0.1", dnsServers: ["10.0.0.53"], ipv4: [], ipv6: [])
+        }
+        await engine.refreshProbes()
+        let c = engine.snapshot.connectivity
+        #expect(neighbors.lookups == 2)
+        #expect(c.gatewayIP == "10.0.0.1")
+        #expect(c.gatewayMAC == mac("00:14:6c:aa:00:02"))
+        #expect(c.dnsServers == ["10.0.0.53"])
+        #expect(c.gatewayLossPercent == 0)
+    }
+
+    @Test func networkSwitchBeforeDHCPStaysClear() async {
+        let wifi = FakeWiFi()
+        let config = FakeConfig()
+        let corpConfig = NetworkConfig(gatewayIP: "10.20.0.1", dnsServers: ["10.20.0.53"], ipv4: ["10.20.0.9"], ipv6: [])
+        config.config = corpConfig
+        let neighbors = FakeNeighbors()
+        let corpRouter = mac("00:0b:86:aa:00:01"), homeRouter = mac("00:14:6c:aa:00:02")
+        neighbors.answers = [corpRouter, corpRouter, homeRouter, homeRouter]
+        let clock = Clock()
+        let recorder = Recorder()
+        let engine = makeEngine(wifi: wifi, config: config, neighbors: neighbors, clock: clock)
+        engine.onNewFindings = { recorder.calls.append($0) }
+        engine.refreshLink()
+        await engine.refreshProbes()
+
+        clock.date = t0 + 60
+        wifi.link = makeLink("Home", "00:14:6c:00:00:01")
+        engine.refreshLink()
+        await engine.refreshProbes()   // DHCP not done yet: still Corp's gateway and DNS
+        clock.date = t0 + 65
+        config.config = NetworkConfig(gatewayIP: "192.168.1.1", dnsServers: ["192.168.1.1"], ipv4: ["192.168.1.34"], ipv6: [])
+        await engine.refreshProbes()
+        clock.date = t0 + 100
+        await engine.refreshProbes()
+
+        #expect(engine.snapshot.connectivity.gatewayMAC == homeRouter)
+        #expect(engine.snapshot.connectedVerdict == .clear)
+        #expect(engine.snapshot.findings.isEmpty)
+        #expect(recorder.calls.isEmpty)
     }
 
     @Test func menuToggleRestartsNoLoop() {

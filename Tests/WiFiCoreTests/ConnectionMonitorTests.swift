@@ -23,10 +23,30 @@ struct ConnectionMonitorTests {
     @Test func gatewayChange() {
         var m = ConnectionMonitor()
         _ = m.update(connection: conn(gw: "00:11:22:33:44:01"), scan: nil, siblingFindings: [], now: t0)
-        let out = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 5)
+        let out = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 30)
         #expect(out.map(\.signal) == [.gatewayChanged])
         #expect(out[0].bssid == nil)
         #expect(out[0].ssid == "Home")
+    }
+
+    @Test func gatewayChangeInsideSettleIsSilent() {
+        var m = ConnectionMonitor()
+        _ = m.update(connection: conn(gw: "00:11:22:33:44:01"), scan: nil, siblingFindings: [], now: t0)
+        _ = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 5)
+        _ = m.update(connection: conn(gw: nil), scan: nil, siblingFindings: [], now: t0 + 20)
+        var out = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 30)
+        #expect(out.isEmpty)
+        // The baseline moved to the value seen last inside the window.
+        out = m.update(connection: conn(gw: "00:11:22:33:44:01"), scan: nil, siblingFindings: [], now: t0 + 40)
+        #expect(out.map(\.signal) == [.gatewayChanged])
+    }
+
+    @Test func gatewayFirstSeenAfterSettleBecomesBaselineSilently() {
+        var m = ConnectionMonitor()
+        _ = m.update(connection: conn(gw: nil), scan: nil, siblingFindings: [], now: t0)
+        _ = m.update(connection: conn(gw: "00:11:22:33:44:01"), scan: nil, siblingFindings: [], now: t0 + 20)
+        let out = m.update(connection: conn(gw: "00:11:22:33:44:01"), scan: nil, siblingFindings: [], now: t0 + 40)
+        #expect(out.isEmpty)
     }
 
     @Test func gatewayNilThenValueIsSilent() {
@@ -142,9 +162,9 @@ struct ConnectionMonitorTests {
     @Test func findingsPersistWithinSession() {
         var m = ConnectionMonitor()
         _ = m.update(connection: conn(gw: "00:11:22:33:44:01"), scan: nil, siblingFindings: [], now: t0)
-        _ = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 5)
-        _ = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 6)
-        let out = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 7)
+        _ = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 30)
+        _ = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 31)
+        let out = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 32)
         #expect(out.filter { $0.signal == .gatewayChanged }.count == 1)
     }
 }

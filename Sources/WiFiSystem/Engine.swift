@@ -58,6 +58,8 @@ public final class Engine {
     @ObservationIgnored private var probesStale = false
     @ObservationIgnored private var scanning = false
     @ObservationIgnored private var probing = false
+    /// A probe was asked for while one was in flight.
+    @ObservationIgnored private var probeRequested = false
     @ObservationIgnored private var fetchingPublicIP = false
     @ObservationIgnored private let tasks = TaskBag()
     @ObservationIgnored private let linkNap = Nap()
@@ -181,12 +183,29 @@ public final class Engine {
         recompute(completedScan: nil)
     }
 
-    /// Reads the IP configuration and probes the gateway, DNS and internet.
+    /// Reads the IP configuration and probes the gateway, DNS and internet. A call that arrives while a probe is
+    /// in flight is not lost: any number of them coalesce into one more probe after the current one finishes.
     public func refreshProbes() async {
-        guard !probing else { return }
+        guard !probing else {
+            probeRequested = true
+            return
+        }
         probing = true
         defer { probing = false }
 
+        var retriedStaleConfig = false
+        repeat {
+            probeRequested = false
+            if await probeOnce() == .configChanged, !retriedStaleConfig {
+                retriedStaleConfig = true
+                probeRequested = true
+            }
+        } while probeRequested
+    }
+
+    private enum ProbeOutcome { case committed, sessionChanged, configChanged }
+
+    private func probeOnce() async -> ProbeOutcome {
         let epoch = connectionEpoch
         let current = config.current()
         var gatewayMAC: MACAddress?
@@ -201,8 +220,10 @@ public final class Engine {
         }
         let internet = await prober.internetCheck()
 
-        // The session changed while probing: these results describe the previous network.
-        guard epoch == connectionEpoch else { return }
+        // Results measured against a previous network or an outdated configuration are discarded whole,
+        // loss sample included.
+        guard epoch == connectionEpoch else { return .sessionChanged }
+        guard config.current() == current else { return .configChanged }
         probesStale = false
         var gatewayLoss: Int?
         if current.gatewayIP != nil {
@@ -221,6 +242,7 @@ public final class Engine {
         snapshot.connectivity.ipv4 = current.ipv4
         snapshot.connectivity.ipv6 = current.ipv6
         recompute(completedScan: nil)
+        return .committed
     }
 
     /// Fetches the public IP unless disabled or already known for this session.

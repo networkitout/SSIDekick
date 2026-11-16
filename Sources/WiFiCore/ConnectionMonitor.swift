@@ -48,7 +48,7 @@ public struct ConnectionMonitor: Sendable {
         }
         let name = connection.ssid
 
-        checkGateway(connection.gatewayMAC, name: name)
+        checkGateway(connection.gatewayMAC, name: name, now: now)
         checkDNS(connection.dnsServers, name: name, now: now)
         if let scan { checkScan(scan, connection: connection) }
         if let previous = lastBSSID, previous != connection.bssid {
@@ -73,13 +73,17 @@ public struct ConnectionMonitor: Sendable {
         }
     }
 
-    private mutating func checkGateway(_ gateway: MACAddress?, name: String) {
+    /// Like DNS, the gateway baseline follows the latest value until the session settles, so a router address
+    /// read before DHCP finished never counts as a change.
+    private mutating func checkGateway(_ gateway: MACAddress?, name: String, now: Date) {
         guard let gateway else { return }
         guard let baseline = gatewayBaseline else {
             gatewayBaseline = gateway
             return
         }
-        if gateway != baseline {
+        if now <= startedAt + Self.settleSeconds {
+            gatewayBaseline = gateway
+        } else if gateway != baseline {
             raise(Finding(signal: .gatewayChanged, ssid: name, bssid: nil,
                           reason: "The router's hardware address changed during this connection (\(baseline) to \(gateway))."))
         }
