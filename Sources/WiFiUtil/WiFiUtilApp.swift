@@ -7,16 +7,19 @@ import WiFiSystem
 struct WiFiUtilApp: App {
     private let engine: Engine
     private let vendors: VendorLookup
+    private let notifier = Notifier()
 
     init() {
         let engine: Engine
         let vendors: VendorLookup
+        // Stored settings are read before the Engine exists so the first scan interval is the stored one.
+        let settings = loadEngineSettings(from: .standard)
         if let scenario = demoScenario(arguments: CommandLine.arguments) {
             // Demo mode touches no real source: no CoreWLAN, no Location, no network.
             let demo = demoSources(scenario)
             vendors = demo.vendors
             engine = Engine(wifi: demo.wifi, config: demo.config, neighbors: demo.neighbors, prober: demo.prober,
-                            location: demo.location, vendors: vendors, settings: EngineSettings())
+                            location: demo.location, vendors: vendors, settings: settings)
         } else {
             // App.init runs on the main thread; both sources must be created there.
             let location = LocationAuthorizer()
@@ -24,10 +27,12 @@ struct WiFiUtilApp: App {
             vendors = Self.bundledVendors()
             engine = Engine(wifi: wifi, config: SystemNetworkConfig(interfaceName: wifi.interfaceName ?? "en0"),
                             neighbors: ARPNeighborTable(), prober: SystemProber(), location: location,
-                            vendors: vendors, settings: EngineSettings())
+                            vendors: vendors, settings: settings)
         }
         self.engine = engine
         self.vendors = vendors
+        let notifier = notifier
+        engine.onNewFindings = { findings in notifier.post(findings) }
         engine.start()
     }
 
@@ -43,6 +48,10 @@ struct WiFiUtilApp: App {
             ScanWindowView(engine: engine, vendors: vendors)
         }
         .defaultSize(width: 820, height: 520)
+
+        Settings {
+            SettingsView(engine: engine)
+        }
     }
 
     /// The vendor table copied into Contents/Resources by scripts/build-app.sh; empty if missing or unreadable.

@@ -8,6 +8,7 @@ struct MenuContentView: View {
     let engine: Engine
     let vendors: VendorLookup
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettingsWindow
 
     private static let locationSettings =
         URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")!
@@ -133,8 +134,7 @@ struct MenuContentView: View {
                 menuButton("Copy report") { copyReport() }
             }
             HStack {
-                // Enabled by Task 12 (settings).
-                menuButton("Settings…") {}.disabled(true)
+                menuButton("Settings…", action: openSettings)
                 menuButton("Quit") { NSApplication.shared.terminate(nil) }
             }
         }
@@ -145,6 +145,13 @@ struct MenuContentView: View {
         // Not checked visually: if SwiftUI already dismisses the popover, orderOut on it is harmless.
         let popover = NSApp.keyWindow
         openWindow(id: scanWindowID)
+        NSApp.activate()
+        popover?.orderOut(nil)
+    }
+
+    private func openSettings() {
+        let popover = NSApp.keyWindow
+        openSettingsWindow()
         NSApp.activate()
         popover?.orderOut(nil)
     }
