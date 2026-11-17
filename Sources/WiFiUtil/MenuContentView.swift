@@ -42,24 +42,19 @@ struct MenuContentView: View {
         } else if snapshot.state == .notConnected || snapshot.link == nil {
             Text("Not connected")
         } else if let link = snapshot.link {
+            warningBanner(warningLines(for: snapshot))
             if snapshot.locationAuthorized {
                 HStack(alignment: .firstTextBaseline) {
                     Text(link.ssid ?? "Unnamed network").font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    VStack(alignment: .trailing, spacing: 2) {
-                        ForEach(warningLines(for: snapshot), id: \.text) { warning in
-                            // Opens the scan window with the connected group expanded, even if it was collapsed.
-                            Button(action: revealConnectedNetwork) {
-                                Text(warning.text).foregroundStyle(warning.verdict == .suspect ? .red : .orange)
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                    }
+                    networkChip(link)
                 }
             } else {
                 locationHint
             }
-            Text("Signal \(link.rssi) dBm · Noise \(link.noise) · SNR \(link.snr)")
+            sectionLabel("Link", symbol: "antenna.radiowaves.left.and.right")
+            signalRow(link)
+            snrRow(link)
             Text(channelLine(link))
             if snapshot.locationAuthorized {
                 HStack {
@@ -70,6 +65,93 @@ struct MenuContentView: View {
             } else {
                 Text("Security: \(securityName(link.security))")
             }
+        }
+    }
+
+    /// One tinted banner for all warning lines; red if any is suspect, else orange. Tapping reveals the network.
+    @ViewBuilder
+    private func warningBanner(_ warnings: [WarningLine]) -> some View {
+        if !warnings.isEmpty {
+            let tint: Color = warnings.contains { $0.verdict == .suspect } ? .red : .orange
+            // Opens the scan window with the connected group expanded, even if it was collapsed.
+            Button(action: revealConnectedNetwork) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(warnings, id: \.text) { Text($0.text) }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(tint)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// "Wi-Fi N · band" when the generation is known, the band alone otherwise.
+    private func networkChip(_ link: LinkSnapshot) -> some View {
+        let band = bandName(link.channel.band)
+        let text = link.generation.map { "Wi-Fi \($0.rawValue) · \(band)" } ?? band
+        return Text(text)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.green)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Color.green.opacity(0.15), in: Capsule())
+    }
+
+    private func sectionLabel(_ title: String, symbol: String) -> some View {
+        Label(title, systemImage: symbol)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    private func signalRow(_ link: LinkSnapshot) -> some View {
+        let color = levelColor(signalLevel(rssi: link.rssi))
+        let filled = signalBars(rssi: link.rssi)
+        let heights: [CGFloat] = [5, 8, 11, 14]
+        return HStack {
+            Text("Signal \(link.rssi) dBm").foregroundStyle(color)
+            Spacer()
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(0..<4, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(index < filled ? color : Color.secondary.opacity(0.3))
+                        .frame(width: 4, height: heights[index])
+                }
+            }
+        }
+    }
+
+    private func snrRow(_ link: LinkSnapshot) -> some View {
+        let level = snrLevel(link.snr)
+        return HStack {
+            Text("Noise \(link.noise) · SNR \(link.snr)")
+            Spacer()
+            Text(levelWord(level)).foregroundStyle(levelColor(level))
+        }
+    }
+
+    private func levelColor(_ level: QualityLevel) -> Color {
+        switch level {
+        case .good: .green
+        case .fair: .orange
+        case .poor: .red
+        case .unknown: .secondary
+        }
+    }
+
+    private func levelWord(_ level: QualityLevel) -> String {
+        switch level {
+        case .good: "good"
+        case .fair: "fair"
+        case .poor: "poor"
+        case .unknown: ""
         }
     }
 
@@ -98,21 +180,25 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private func connectivityBlock(_ net: ConnectivitySnapshot) -> some View {
+        sectionLabel("Connectivity", symbol: "globe")
         // "blocked": the probe could not be sent (for example Local Network access was refused), which is not loss.
         row("Gateway \(net.gatewayIP ?? "–")",
             net.gatewayBlocked
                 ? "blocked"
-                : "\(millis(net.gatewayLatencyMs))   \(net.gatewayLossPercent.map { "\($0)% loss" } ?? "– loss")")
-        row("DNS \(net.dnsServers.first ?? "–")", net.dnsBlocked ? "blocked" : millis(net.dnsLatencyMs))
-        row("Internet", internetText(net))
+                : "\(millis(net.gatewayLatencyMs))   \(net.gatewayLossPercent.map { "\($0)% loss" } ?? "– loss")",
+            level: gatewayLevel(net))
+        row("DNS \(net.dnsServers.first ?? "–")", net.dnsBlocked ? "blocked" : millis(net.dnsLatencyMs),
+            level: dnsLevel(net))
+        row("Internet", internetText(net), level: internetLevel(net.internet), tintValue: true)
         Text(addressLine(net))
     }
 
-    private func row(_ title: String, _ value: String) -> some View {
-        HStack {
+    private func row(_ title: String, _ value: String, level: QualityLevel, tintValue: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(levelColor(level)).frame(width: 8, height: 8)
             Text(title)
             Spacer()
-            Text(value)
+            Text(value).foregroundStyle(tintValue ? levelColor(level) : .primary)
         }
     }
 
