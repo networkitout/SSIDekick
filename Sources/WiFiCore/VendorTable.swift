@@ -2,7 +2,16 @@ import Foundation
 
 public protocol VendorLookup: Sendable {
     func vendor(for address: MACAddress) -> String?
+    /// True when no vendor is known at all, so vendor checks cannot run.
+    var isEmpty: Bool { get }
 }
+
+public extension VendorLookup {
+    var isEmpty: Bool { false }
+}
+
+/// Shown in the scan window and the report while the vendor table is empty.
+public let vendorTableMissingText = "Vendor table not installed — vendor checks are off."
 
 /// OUI-to-vendor lookup. Input is one "A4B1C2<TAB>Vendor name" per line; blank and malformed lines are skipped.
 public struct VendorTable: VendorLookup {
@@ -21,6 +30,8 @@ public struct VendorTable: VendorLookup {
     }
 
     public static let empty = VendorTable(tsv: "")
+
+    public var isEmpty: Bool { names.isEmpty }
 
     public func vendor(for address: MACAddress) -> String? {
         guard !address.isLocallyAdministered else { return nil }

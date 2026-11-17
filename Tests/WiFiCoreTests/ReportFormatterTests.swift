@@ -77,4 +77,10 @@ import Foundation
         #expect(text.contains("Wi-Fi event monitoring could not start: refused"))
         #expect(!formatReport(connected(), vendors: vendors, now: now).contains("event monitoring"))
     }
+
+    @Test func emptyVendorTableIsStated() {
+        let text = formatReport(connected(), vendors: VendorTable.empty, now: now)
+        #expect(text.contains("Vendor table not installed — vendor checks are off."))
+        #expect(!formatReport(connected(), vendors: vendors, now: now).contains("Vendor table not installed"))
+    }
 }

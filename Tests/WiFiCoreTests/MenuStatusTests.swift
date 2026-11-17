@@ -68,7 +68,7 @@ private func snapshot(state: WiFiState = .connected, link: LinkSnapshot? = link(
     }
     @Test func oneSuspectTwin() {
         let s = snapshot(findings: [finding(.securityMismatch)], verdict: .suspect)
-        #expect(twinWarning(for: s) == "⚠ 1 suspect twin")
+        #expect(twinWarning(for: s)?.text == "⚠ 1 suspect twin")
     }
     @Test func countsEachSuspectAddressOnce() {
         let s = snapshot(findings: [
@@ -78,7 +78,7 @@ private func snapshot(state: WiFiState = .connected, link: LinkSnapshot? = link(
             finding(.vendorMismatch, bssid: "a4:b1:c2:00:00:04"),
             finding(.securityMismatch, ssid: "Other", bssid: "a4:b1:c2:00:00:05"),
         ], verdict: .suspect)
-        #expect(twinWarning(for: s) == "⚠ 2 suspect twins")
+        #expect(twinWarning(for: s)?.text == "⚠ 2 suspect twins")
     }
     @Test func worthALookCount() {
         let s = snapshot(findings: [
@@ -87,10 +87,45 @@ private func snapshot(state: WiFiState = .connected, link: LinkSnapshot? = link(
             finding(.beaconMismatch, bssid: "a4:b1:c2:00:00:03"),
             finding(.countryMismatch, bssid: "a4:b1:c2:00:00:04"),
         ], verdict: .worthALook)
-        #expect(twinWarning(for: s) == "⚠ 2 worth a look")
+        #expect(twinWarning(for: s)?.text == "⚠ 2 worth a look")
     }
-    @Test func connectionLevelFindingCounts() {
+    @Test func connectionLevelFindingIsNeverATwin() {
         let s = snapshot(findings: [finding(.gatewayChanged, bssid: nil)], verdict: .suspect)
-        #expect(twinWarning(for: s) == "⚠ 1 suspect twin")
+        #expect(twinWarning(for: s) == nil)
+        #expect(warningLines(for: s).map(\.text) == ["⚠ Gateway changed"])
+        #expect(warningLines(for: s).map(\.verdict) == [.suspect])
+    }
+    @Test func dnsAndBothConnectionLines() {
+        let dns = snapshot(findings: [finding(.dnsChanged, bssid: nil)], verdict: .suspect)
+        #expect(warningLines(for: dns).map(\.text) == ["⚠ DNS servers changed"])
+        let both = snapshot(findings: [finding(.dnsChanged, bssid: nil), finding(.gatewayChanged, bssid: nil)],
+                            verdict: .suspect)
+        #expect(warningLines(for: both).map(\.text) == ["⚠ Gateway and DNS changed"])
+    }
+    @Test func twinAndConnectionLinesTogether() {
+        let s = snapshot(findings: [finding(.vendorMismatch), finding(.gatewayChanged, bssid: nil)], verdict: .suspect)
+        #expect(warningLines(for: s).map(\.text) == ["⚠ 1 worth a look", "⚠ Gateway changed"])
+        #expect(warningLines(for: s).map(\.verdict) == [.worthALook, .suspect])
+        let red = snapshot(findings: [finding(.clonedAddress), finding(.dnsChanged, bssid: nil)], verdict: .suspect)
+        #expect(warningLines(for: red).map(\.text) == ["⚠ 1 suspect twin", "⚠ DNS servers changed"])
+    }
+    @Test func noteLevelAddressGivesNoTwinLine() {
+        let s = snapshot(findings: [finding(.countryMismatch), finding(.gatewayChanged, bssid: nil)], verdict: .suspect)
+        #expect(warningLines(for: s).map(\.text) == ["⚠ Gateway changed"])
+    }
+}
+
+@Suite struct StatusAccessibilityTests {
+    @Test func labelsFollowTheWarningLines() {
+        #expect(statusAccessibilityLabel(for: snapshot()) == "WiFiUtil")
+        #expect(statusAccessibilityLabel(for: snapshot(state: .off, link: nil)) == "WiFiUtil: not connected")
+        #expect(statusAccessibilityLabel(for: snapshot(internet: .offline)) == "WiFiUtil: no internet")
+        #expect(statusAccessibilityLabel(for: snapshot(findings: [finding(.securityMismatch)], verdict: .suspect))
+                == "WiFiUtil: 1 suspect twin")
+        #expect(statusAccessibilityLabel(for: snapshot(findings: [finding(.gatewayChanged, bssid: nil)], verdict: .suspect))
+                == "WiFiUtil: Gateway changed")
+        #expect(statusAccessibilityLabel(for: snapshot(findings: [finding(.vendorMismatch),
+                                                                 finding(.dnsChanged, bssid: nil)], verdict: .suspect))
+                == "WiFiUtil: 1 worth a look; DNS servers changed")
     }
 }

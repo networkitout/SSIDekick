@@ -225,14 +225,14 @@ struct EngineTests {
         plane.refreshLink()
         await plane.scanNow()
         #expect(statusGlyph(for: plane.snapshot) == StatusGlyph(symbol: "wifi", tint: .orange))
-        #expect(twinWarning(for: plane.snapshot) == "⚠ 1 worth a look")
+        #expect(warningLines(for: plane.snapshot).map(\.text) == ["⚠ 1 worth a look"])
 
         let office = makeDemoEngine(.office, recorder: recorder)
         office.refreshLink()
         await office.refreshProbes()
         await office.scanNow()
         #expect(statusGlyph(for: office.snapshot) == StatusGlyph(symbol: "wifi", tint: .normal))
-        #expect(twinWarning(for: office.snapshot) == nil)
+        #expect(warningLines(for: office.snapshot).isEmpty)
 
         let off = makeDemoEngine(.wifiOff, recorder: recorder)
         off.refreshLink()
@@ -244,7 +244,7 @@ struct EngineTests {
         await denied.scanNow()
         #expect(!denied.snapshot.locationAuthorized)
         #expect(denied.snapshot.link != nil)
-        #expect(twinWarning(for: denied.snapshot) == nil)
+        #expect(warningLines(for: denied.snapshot).isEmpty)
     }
 
     @Test func officeStaysClear() async {

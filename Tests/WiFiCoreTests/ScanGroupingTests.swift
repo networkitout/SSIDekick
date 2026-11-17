@@ -87,6 +87,36 @@ private func finding(_ signal: Signal, ssid: String, bssid: String?) -> Finding 
         #expect(groups[1].ssid == "Other" && groups[1].verdict == .clear)
     }
 
+    @Test func connectedHeaderShowsFindingsWithoutARow() {
+        let scan = [ap("Mine", "00:00:00:00:00:01"), ap("Other", "00:00:00:00:00:09")]
+        let all = [
+            finding(.vendorMismatch, ssid: "Mine", bssid: "00:00:00:00:00:01"),   // has a row
+            finding(.louderNewcomer, ssid: "Mine", bssid: "00:00:00:00:00:02"),   // not in the latest scan
+            finding(.gatewayChanged, ssid: "Mine", bssid: nil),
+            finding(.vendorMismatch, ssid: "Other", bssid: "00:00:00:00:00:03"),
+            finding(.louderNewcomer, ssid: "Other", bssid: "00:00:00:00:00:09"),
+        ]
+        let header = connectedHeaderFindings(ssid: "Mine", scan: scan, findings: all)
+        #expect(header.map(\.signal) == [.louderNewcomer, .gatewayChanged])
+        #expect(header.map(headerFindingText) == ["00:00:00:00:00:02 (not in the latest scan): r", "Connection: r"])
+    }
+
+    @Test func connectedGroupIsSynthesisedWhenTheScanLacksIt() {
+        let scan = [ap("Other", "00:00:00:00:00:09", rssi: -30)]
+        let all = [finding(.louderNewcomer, ssid: "Mine", bssid: "00:00:00:00:00:02")]
+        let groups = groupScan(scan, findings: all, connectedSSID: "Mine")
+        #expect(groups.map(\.ssid) == ["Mine", "Other"])
+        #expect(groups[0].isConnected && groups[0].accessPoints.isEmpty)
+        #expect(groups[0].verdict == .worthALook)
+        #expect(groupScan([], findings: [], connectedSSID: "Mine").map(\.ssid) == ["Mine"])
+    }
+
+    @Test func connectedGroupVerdictIncludesFindingsWithoutARow() {
+        let scan = [ap("Mine", "00:00:00:00:00:01")]
+        let all = [finding(.louderNewcomer, ssid: "Mine", bssid: "00:00:00:00:00:02")]
+        #expect(groupScan(scan, findings: all, connectedSSID: "Mine")[0].verdict == .worthALook)
+    }
+
     @Test func rowFindingsMatchSSIDAndAddress() {
         let a = ap("Net", "00:00:00:00:00:01")
         let all = [

@@ -14,9 +14,13 @@ public struct NotificationContent: Sendable, Equatable {
 }
 
 public func notificationContent(for finding: Finding) -> NotificationContent {
-    let title = finding.signal.strength == .strong
-        ? "Suspect twin: \(finding.ssid)"
-        : "Worth a look: \(finding.ssid)"
+    let title: String
+    switch finding.signal {
+    case .gatewayChanged: title = "Gateway changed: \(finding.ssid)"
+    case .dnsChanged: title = "DNS servers changed: \(finding.ssid)"
+    default:
+        title = finding.signal.strength == .strong ? "Suspect twin: \(finding.ssid)" : "Worth a look: \(finding.ssid)"
+    }
     let identifier = "finding.\(finding.signal.rawValue).\(finding.ssid).\(finding.bssid?.description ?? "-")"
     return NotificationContent(identifier: identifier, title: title, body: finding.reason)
 }

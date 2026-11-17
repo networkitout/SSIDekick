@@ -17,6 +17,11 @@ import WiFiCore
         #expect(notificationContent(for: finding(.countryMismatch)).title == "Worth a look: Cafe")
     }
 
+    @Test func connectionFindingsAreNotCalledTwins() {
+        #expect(notificationContent(for: finding(.gatewayChanged, bssid: nil)).title == "Gateway changed: Cafe")
+        #expect(notificationContent(for: finding(.dnsChanged, bssid: nil)).title == "DNS servers changed: Cafe")
+    }
+
     @Test func identifierIsStableAndDistinguishes() {
         let a = notificationContent(for: finding(.clonedAddress))
         #expect(a.identifier == notificationContent(for: finding(.clonedAddress)).identifier)

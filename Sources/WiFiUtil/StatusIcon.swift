@@ -1,14 +1,16 @@
 import AppKit
 import SwiftUI
 import WiFiCore
+import WiFiSystem
 
-/// The menu bar glyph; see `statusGlyph(for:)` for which symbol and colour apply.
+/// The menu bar glyph; see `statusGlyph(for:)` for which symbol and colour apply. It reads the Engine's snapshot
+/// in its own body, so the glyph redraws with every change without re-evaluating the app's scenes.
 struct StatusIcon: View {
-    let snapshot: Snapshot
+    let engine: Engine
 
     var body: some View {
-        let glyph = statusGlyph(for: snapshot)
-        image(glyph).accessibilityLabel(label(glyph))
+        let snapshot = engine.snapshot
+        image(statusGlyph(for: snapshot)).accessibilityLabel(statusAccessibilityLabel(for: snapshot))
     }
 
     /// Menu bar labels are drawn as templates, which drops SwiftUI colours, so a tinted glyph is a
@@ -25,18 +27,5 @@ struct StatusIcon: View {
         else { return Image(systemName: glyph.symbol) }
         tinted.isTemplate = false
         return Image(nsImage: tinted)
-    }
-
-    private func label(_ glyph: StatusGlyph) -> String {
-        switch glyph.tint {
-        case .red: return "WiFiUtil: suspect twin on this network"
-        case .orange: return "WiFiUtil: worth a look"
-        case .normal:
-            switch glyph.symbol {
-            case "wifi.slash": return "WiFiUtil: not connected"
-            case "wifi.exclamationmark": return "WiFiUtil: no internet"
-            default: return "WiFiUtil"
-            }
-        }
     }
 }

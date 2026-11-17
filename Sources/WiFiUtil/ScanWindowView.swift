@@ -29,6 +29,7 @@ func securityName(_ mode: SecurityMode?) -> String {
 struct ScanWindowView: View {
     let engine: Engine
     let vendors: VendorLookup
+    let windowState: ScanWindowState
 
     private enum Tab: Hashable { case networks, channels }
     @State private var tab: Tab = .networks
@@ -39,7 +40,7 @@ struct ScanWindowView: View {
             header(snapshot)
             Divider()
             TabView(selection: $tab) {
-                NetworksTab(snapshot: snapshot, vendors: vendors)
+                NetworksTab(snapshot: snapshot, vendors: vendors, revealRequests: windowState.revealRequests)
                     .tabItem { Text("Networks") }
                     .tag(Tab.networks)
                 ChannelCrowdingView(snapshot: snapshot)
@@ -59,6 +60,9 @@ struct ScanWindowView: View {
             if let error = snapshot.scanError {
                 Text(error).foregroundStyle(.red).lineLimit(1)
             }
+            if vendors.isEmpty {
+                Text(vendorTableMissingText).foregroundStyle(.secondary).lineLimit(1)
+            }
             Spacer()
             Button("Scan now") { Task { await engine.scanNow() } }
                 .disabled(engine.isScanning)
@@ -72,6 +76,8 @@ struct ScanWindowView: View {
 private struct NetworksTab: View {
     let snapshot: Snapshot
     let vendors: VendorLookup
+    /// Changes when the menu asks to show the connected network.
+    let revealRequests: Int
     /// Groups the user has toggled; absent means the default (the connected group is open).
     @State private var toggled: [String: Bool] = [:]
 
@@ -86,20 +92,26 @@ private struct NetworksTab: View {
                 Text("The Channels tab still works without names.").foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if snapshot.scan.isEmpty {
-            Text("No networks found yet. Use Scan now.")
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             let groups = groupScan(snapshot.scan, findings: snapshot.findings, connectedSSID: snapshot.link?.ssid)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    columnTitles
-                    ForEach(groups) { group in
-                        groupView(group)
+            if groups.isEmpty {
+                Text("No networks found yet. Use Scan now.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        columnTitles
+                        ForEach(groups) { group in
+                            groupView(group)
+                        }
                     }
+                    .padding(.horizontal, 10)
                 }
-                .padding(.horizontal, 10)
+                // Runs when the tab appears and on every request from the menu's warning line.
+                .task(id: revealRequests) {
+                    if let ssid = snapshot.link?.ssid { toggled[ssid] = true }
+                }
             }
         }
     }
@@ -131,8 +143,10 @@ private struct NetworksTab: View {
             .buttonStyle(.plain)
             if isExpanded(group) {
                 if group.isConnected, let ssid = group.ssid {
-                    ForEach(Array(connectionFindings(ssid: ssid, in: snapshot.findings).enumerated()), id: \.offset) {
-                        Text("Connection: \($0.element.reason)")
+                    // Every finding without a row of its own, so the menu bar icon is always explained here.
+                    let unlisted = connectedHeaderFindings(ssid: ssid, scan: snapshot.scan, findings: snapshot.findings)
+                    ForEach(Array(unlisted.enumerated()), id: \.offset) {
+                        Text(headerFindingText($0.element))
                             .font(.caption).foregroundStyle(tint(for: group.verdict) ?? .secondary)
                             .padding(.leading, 22).padding(.vertical, 2)
                     }

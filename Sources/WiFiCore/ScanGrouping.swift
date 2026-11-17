@@ -26,13 +26,31 @@ public func findings(for accessPoint: AccessPoint, in findings: [Finding]) -> [F
     return findings.filter { $0.ssid == ssid && $0.bssid == bssid }
 }
 
-/// The connection-level findings of the connected network, shown once in its group header.
+/// The connection-level findings of the connected network.
 public func connectionFindings(ssid: String, in findings: [Finding]) -> [Finding] {
     findings.filter { $0.ssid == ssid && $0.bssid == nil }
 }
 
+/// The connected network's findings that have no row in the scan window: connection-level ones, and those of
+/// addresses missing from the latest scan. Shown in the connected group's header so the icon is always explained.
+/// Address findings come first, in their original order.
+public func connectedHeaderFindings(ssid: String, scan: [AccessPoint], findings: [Finding]) -> [Finding] {
+    let listed = Set(scan.filter { $0.ssid == ssid }.compactMap(\.bssid))
+    let mine = findings.filter { $0.ssid == ssid }
+    let unlisted = mine.filter { $0.bssid.map { !listed.contains($0) } ?? false }
+    return unlisted + mine.filter { $0.bssid == nil }
+}
+
+/// One header line: "Connection: <reason>" or "<address> (not in the latest scan): <reason>".
+public func headerFindingText(_ finding: Finding) -> String {
+    guard let address = finding.bssid else { return "Connection: \(finding.reason)" }
+    return "\(address) (not in the latest scan): \(finding.reason)"
+}
+
 /// Groups a scan by network name. Order: the connected group, then by verdict (worst first), then by strongest
-/// signal. Each nameless entry is its own group, after all named ones.
+/// signal. Each nameless entry is its own group, after all named ones. The connected group's verdict is the whole
+/// network's verdict (rows, connection and addresses missing from the scan); when the scan has no entry with the
+/// connected name, an empty connected group is synthesised so its header can still show the findings.
 public func groupScan(_ scan: [AccessPoint], findings: [Finding], connectedSSID: String?) -> [NetworkGroup] {
     var named: [String: [AccessPoint]] = [:]
     var nameless: [AccessPoint] = []
@@ -47,10 +65,10 @@ public func groupScan(_ scan: [AccessPoint], findings: [Finding], connectedSSID:
     let namedGroups: [NetworkGroup] = named.map { ssid, members in
         let sorted = members.sorted { $0.rssi > $1.rssi }
         let isConnected = ssid == connectedSSID
-        var verdicts = sorted.map { verdict(for: WiFiCore.findings(for: $0, in: findings)) }
-        if isConnected { verdicts.append(verdict(for: connectionFindings(ssid: ssid, in: findings))) }
-        return NetworkGroup(id: ssid, ssid: ssid, accessPoints: sorted, verdict: verdicts.max() ?? .clear,
-                            isConnected: isConnected)
+        let verdict = isConnected
+            ? networkVerdict(ssid: ssid, findings: findings)
+            : sorted.map { WiFiCore.verdict(for: WiFiCore.findings(for: $0, in: findings)) }.max() ?? .clear
+        return NetworkGroup(id: ssid, ssid: ssid, accessPoints: sorted, verdict: verdict, isConnected: isConnected)
     }
     .sorted { a, b in
         if a.isConnected != b.isConnected { return a.isConnected }
@@ -60,11 +78,17 @@ public func groupScan(_ scan: [AccessPoint], findings: [Finding], connectedSSID:
         return a.id < b.id
     }
 
+    var connected: [NetworkGroup] = []
+    if let connectedSSID, !connectedSSID.isEmpty, named[connectedSSID] == nil {
+        connected = [NetworkGroup(id: connectedSSID, ssid: connectedSSID, accessPoints: [],
+                                  verdict: networkVerdict(ssid: connectedSSID, findings: findings), isConnected: true)]
+    }
+
     let hiddenGroups = nameless.sorted { $0.rssi > $1.rssi }.enumerated().map { index, accessPoint in
         NetworkGroup(id: "hidden-\(index)", ssid: nil, accessPoints: [accessPoint], verdict: .clear,
                      isConnected: false)
     }
-    return namedGroups + hiddenGroups
+    return connected + namedGroups + hiddenGroups
 }
 
 /// "Scanned 12 s ago" and friends for the scan window's header.
@@ -82,3 +106,4 @@ public func signalOpacity(rssi: Int) -> Double {
     let fraction = min(1, max(0, Double(rssi + 90) / 50))
     return 0.25 + 0.75 * fraction
 }
+

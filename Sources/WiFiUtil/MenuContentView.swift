@@ -7,6 +7,7 @@ import WiFiSystem
 struct MenuContentView: View {
     let engine: Engine
     let vendors: VendorLookup
+    let windowState: ScanWindowState
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettingsWindow
 
@@ -27,6 +28,9 @@ struct MenuContentView: View {
         .frame(width: 340, alignment: .leading)
         .onAppear { engine.menuOpen = true }
         .onDisappear { engine.menuOpen = false }
+        // Belt-and-braces pending the visual pass: onAppear/onDisappear of a window-style MenuBarExtra are not
+        // verified, so the popover's own window also drives menuOpen (key or visible: open; resigned or closed: shut).
+        .background(HostWindowObserver { engine.menuOpen = $0 })
     }
 
     // MARK: Link
@@ -42,12 +46,14 @@ struct MenuContentView: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(link.ssid ?? "Unnamed network").font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    if let warning = twinWarning(for: snapshot) {
-                        // Opens the scan window, whose connected group starts expanded.
-                        Button(action: openScanWindow) {
-                            Text(warning).foregroundStyle(snapshot.connectedVerdict == .suspect ? .red : .orange)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        ForEach(warningLines(for: snapshot), id: \.text) { warning in
+                            // Opens the scan window with the connected group expanded, even if it was collapsed.
+                            Button(action: revealConnectedNetwork) {
+                                Text(warning.text).foregroundStyle(warning.verdict == .suspect ? .red : .orange)
+                            }
+                            .buttonStyle(.borderless)
                         }
-                        .buttonStyle(.borderless)
                     }
                 }
             } else {
@@ -141,6 +147,11 @@ struct MenuContentView: View {
                 menuButton("Quit") { NSApplication.shared.terminate(nil) }
             }
         }
+    }
+
+    private func revealConnectedNetwork() {
+        windowState.revealConnected()
+        openScanWindow()
     }
 
     private func openScanWindow() {

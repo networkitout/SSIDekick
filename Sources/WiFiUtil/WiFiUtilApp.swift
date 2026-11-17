@@ -6,9 +6,11 @@ import WiFiSystem
 
 @main
 struct WiFiUtilApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let engine: Engine
     private let vendors: VendorLookup
     private let notifier = Notifier()
+    private let windowState = ScanWindowState()
 
     init() {
         let engine: Engine
@@ -46,16 +48,19 @@ struct WiFiUtilApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContentView(engine: engine, vendors: vendors)
+            MenuContentView(engine: engine, vendors: vendors, windowState: windowState)
         } label: {
-            StatusIcon(snapshot: engine.snapshot)
+            StatusIcon(engine: engine)
         }
         .menuBarExtraStyle(.window)
 
         Window("Nearby networks", id: scanWindowID) {
-            ScanWindowView(engine: engine, vendors: vendors)
+            ScanWindowView(engine: engine, vendors: vendors, windowState: windowState)
         }
         .defaultSize(width: 820, height: 520)
+        // Opens only when asked for, never at launch or from a restored session.
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
 
         Settings {
             SettingsView(engine: engine)

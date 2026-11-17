@@ -29,5 +29,8 @@ import Testing
 
     @Test func emptyTableResolvesNothing() {
         #expect(VendorTable.empty.vendor(for: MACAddress("a4:b1:c2:00:00:00")!) == nil)
+        #expect(VendorTable.empty.isEmpty)
+        #expect(VendorTable(tsv: "not a table\n").isEmpty)
+        #expect(!table.isEmpty)
     }
 }

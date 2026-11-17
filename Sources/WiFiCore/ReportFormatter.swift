@@ -102,6 +102,7 @@ public func formatReport(_ snapshot: Snapshot, vendors: VendorLookup, now: Date)
 
     lines.append("")
     lines.append("Nearby networks")
+    if vendors.isEmpty { lines.append(vendorTableMissingText) }
     if let error = snapshot.scanError { lines.append("Scan error: \(error)") }
     if let time = snapshot.scanTime { lines.append("Scanned \(time.formatted(.iso8601))") }
     if !visible {

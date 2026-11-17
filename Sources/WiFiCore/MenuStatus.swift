@@ -31,18 +31,64 @@ public func statusGlyph(for snapshot: Snapshot) -> StatusGlyph {
     return StatusGlyph(symbol: "wifi", tint: .normal)
 }
 
-/// The menu's warning line, or nil when the connected network is below "worth a look".
-/// N counts the connected network's access points (and the connection itself, for gateway or DNS findings)
-/// whose own verdict equals the network's verdict.
-public func twinWarning(for snapshot: Snapshot) -> String? {
+/// One warning line in the menu, with the verdict that colours it.
+public struct WarningLine: Sendable, Equatable {
+    public var text: String
+    public var verdict: Verdict
+
+    public init(text: String, verdict: Verdict) {
+        self.text = text
+        self.verdict = verdict
+    }
+}
+
+/// The twin line: access points (findings with an address) of the connected network at their worst verdict, when
+/// that is "worth a look" or higher. Connection-level findings are never counted as twins.
+public func twinWarning(for snapshot: Snapshot) -> WarningLine? {
     guard snapshot.connectedVerdict >= .worthALook, let ssid = snapshot.link?.ssid else { return nil }
-    let mine = snapshot.findings.filter { $0.ssid == ssid }
-    let count = Set(mine.map(\.bssid))
-        .filter { address in verdict(for: mine.filter { $0.bssid == address }) == snapshot.connectedVerdict }
-        .count
-    guard count > 0 else { return nil }
-    switch snapshot.connectedVerdict {
-    case .suspect: return "⚠ \(count) suspect \(count == 1 ? "twin" : "twins")"
-    default: return "⚠ \(count) worth a look"
+    let mine = snapshot.findings.filter { $0.ssid == ssid && $0.bssid != nil }
+    let verdicts = Set(mine.map(\.bssid)).map { address in verdict(for: mine.filter { $0.bssid == address }) }
+    guard let worst = verdicts.max(), worst >= .worthALook else { return nil }
+    let count = verdicts.filter { $0 == worst }.count
+    let text = worst == .suspect ? "⚠ \(count) suspect \(count == 1 ? "twin" : "twins")" : "⚠ \(count) worth a look"
+    return WarningLine(text: text, verdict: worst)
+}
+
+/// The connection line: "⚠ Gateway changed", "⚠ DNS servers changed" or "⚠ Gateway and DNS changed".
+public func connectionWarning(for snapshot: Snapshot) -> WarningLine? {
+    guard snapshot.connectedVerdict >= .worthALook, let ssid = snapshot.link?.ssid else { return nil }
+    let mine = connectionFindings(ssid: ssid, in: snapshot.findings)
+    let bucket = verdict(for: mine)
+    guard bucket >= .worthALook else { return nil }
+    let signals = Set(mine.map(\.signal))
+    let text: String
+    switch (signals.contains(.gatewayChanged), signals.contains(.dnsChanged)) {
+    case (true, true): text = "⚠ Gateway and DNS changed"
+    case (true, false): text = "⚠ Gateway changed"
+    case (false, true): text = "⚠ DNS servers changed"
+    case (false, false): return nil
+    }
+    return WarningLine(text: text, verdict: bucket)
+}
+
+/// The menu's warning lines: the twin line, then the connection line; empty below "worth a look".
+public func warningLines(for snapshot: Snapshot) -> [WarningLine] {
+    [twinWarning(for: snapshot), connectionWarning(for: snapshot)].compactMap { $0 }
+}
+
+/// The menu bar icon's accessibility label, following the same wording as the glyph and the warning lines.
+public func statusAccessibilityLabel(for snapshot: Snapshot) -> String {
+    let glyph = statusGlyph(for: snapshot)
+    switch glyph.tint {
+    case .red, .orange:
+        let lines = warningLines(for: snapshot).map { String($0.text.drop { $0 == "⚠" || $0 == " " }) }
+        if !lines.isEmpty { return "WiFiUtil: " + lines.joined(separator: "; ") }
+        return glyph.tint == .red ? "WiFiUtil: suspect" : "WiFiUtil: worth a look"
+    case .normal:
+        switch glyph.symbol {
+        case "wifi.slash": return "WiFiUtil: not connected"
+        case "wifi.exclamationmark": return "WiFiUtil: no internet"
+        default: return "WiFiUtil"
+        }
     }
 }
