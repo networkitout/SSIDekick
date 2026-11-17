@@ -122,6 +122,7 @@ private struct NetworksTab: View {
 
     private var columnTitles: some View {
         HStack(spacing: 8) {
+            Color.clear.frame(width: Col.indent, height: 0)
             Text("Address").frame(width: Col.address, alignment: .leading)
             Text("Vendor").frame(width: Col.vendor, alignment: .leading)
             Text("Channel").frame(width: Col.channel, alignment: .leading)
@@ -199,29 +200,38 @@ private struct NetworksTab: View {
             .help("Probably one device: same maker prefix and neighbouring addresses")
             if expanded {
                 ForEach(radioRows(device)) {
-                    row($0.accessPoint, indent: 44)
+                    row($0.accessPoint, nested: true)
                 }
             }
         }
     }
 
     private func deviceHeader(_ device: DeviceGroup, expanded: Bool) -> some View {
+        // Deliberately the lexicographically lowest address, not the one the id and pattern use (lowest last byte):
+        // a locally administered address has no vendor, so the vendor must come from a universally administered
+        // radio, and within one device that is always the lexicographically lowest.
         let vendor = device.accessPoints.compactMap(\.bssid).min { $0.bytes.lexicographicallyPrecedes($1.bytes) }
             .flatMap { vendors.vendor(for: $0) } ?? "–"
+        // The same columns as a radio row; the chevron and router icon sit in the row's indent.
         return HStack(spacing: 8) {
-            Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                .frame(width: 12).foregroundStyle(.secondary)
-            Image(systemName: "wifi.router").foregroundStyle(.secondary)
-            Text(device.addressPattern).frame(width: Col.address - 34, alignment: .leading)
+            HStack(spacing: 4) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right").frame(width: 12)
+                Image(systemName: "wifi.router").frame(width: 16)
+            }
+            .foregroundStyle(.secondary)
+            .frame(width: Col.indent, alignment: .leading)
+            Text(device.addressPattern).frame(width: Col.address, alignment: .leading)
             Text(vendor).lineLimit(1).frame(width: Col.vendor, alignment: .leading)
             Text(device.bands.map(bandName).joined(separator: " · "))
-                .frame(width: Col.channel + Col.band, alignment: .leading)
+                .lineLimit(1)
+                .frame(width: Col.channel + Col.band + 8, alignment: .leading)
+            Text("\(device.strongestRSSI) dBm").frame(width: Col.signal, alignment: .trailing)
+            Color.clear.frame(width: Col.security + Col.generation + 8, height: 0)
             Text("\(device.accessPoints.count) radios").foregroundStyle(.secondary)
-            Spacer()
-            Text("\(device.strongestRSSI) dBm")
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 12).monospacedDigit())
-        .padding(.vertical, 4).padding(.leading, 22)
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
     }
 
@@ -246,11 +256,14 @@ private struct NetworksTab: View {
         .contentShape(Rectangle())
     }
 
-    private func row(_ accessPoint: AccessPoint, indent: CGFloat = 22) -> some View {
+    /// A radio row; `nested` adds a leading spacer (the device header's slot width) before the same columns.
+    private func row(_ accessPoint: AccessPoint, nested: Bool = false) -> some View {
         let mine = findings(for: accessPoint, in: snapshot.findings)
         let rowVerdict = verdict(for: mine)
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
+                Color.clear.frame(width: Col.indent, height: 0)
+                if nested { Color.clear.frame(width: Col.indent, height: 0) }
                 Text(accessPoint.bssid?.description ?? "–").frame(width: Col.address, alignment: .leading)
                 Text(accessPoint.bssid.flatMap { vendors.vendor(for: $0) } ?? "–")
                     .lineLimit(1).frame(width: Col.vendor, alignment: .leading)
@@ -269,7 +282,7 @@ private struct NetworksTab: View {
             }
         }
         .font(.system(size: 12).monospacedDigit())
-        .padding(.vertical, 4).padding(.leading, indent)
+        .padding(.vertical, 4)
         .background(tint(for: rowVerdict)?.opacity(0.15) ?? .clear)
     }
 
@@ -282,6 +295,8 @@ private struct NetworksTab: View {
     }
 
     private enum Col {
+        /// The leading slot: the device header's chevron and router icon, and the same space in a radio row.
+        static let indent: CGFloat = 32
         static let address: CGFloat = 130
         static let vendor: CGFloat = 130
         static let channel: CGFloat = 100

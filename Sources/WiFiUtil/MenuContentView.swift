@@ -46,6 +46,7 @@ struct MenuContentView: View {
             if snapshot.locationAuthorized {
                 HStack(alignment: .firstTextBaseline) {
                     Text(link.ssid ?? "Unnamed network").font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1).truncationMode(.tail)
                     Spacer()
                     networkChip(link)
                 }
@@ -103,6 +104,7 @@ struct MenuContentView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 2)
             .background(Color.green.opacity(0.15), in: Capsule())
+            .fixedSize()
     }
 
     private func sectionLabel(_ title: String, symbol: String) -> some View {
@@ -112,11 +114,13 @@ struct MenuContentView: View {
     }
 
     private func signalRow(_ link: LinkSnapshot) -> some View {
-        let color = levelColor(signalLevel(rssi: link.rssi))
+        let level = signalLevel(rssi: link.rssi)
+        let color = levelColor(level)
         let filled = signalBars(rssi: link.rssi)
         let heights: [CGFloat] = [5, 8, 11, 14]
+        let reading = level == .unknown ? "–" : "\(link.rssi) dBm"
         return HStack {
-            Text("Signal \(link.rssi) dBm").foregroundStyle(color)
+            Text("Signal \(reading)")
             Spacer()
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(0..<4, id: \.self) { index in
@@ -125,16 +129,26 @@ struct MenuContentView: View {
                         .frame(width: 4, height: heights[index])
                 }
             }
+            .accessibilityHidden(true)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Signal \(reading), \(levelWord(level))")
     }
 
     private func snrRow(_ link: LinkSnapshot) -> some View {
-        let level = snrLevel(link.snr)
+        let level = snrLevel(rssi: link.rssi, noise: link.noise)
+        // A reading of 0 or above is a failed measurement; show "–" for it (and for the SNR it spoils).
+        let noise = link.noise >= 0 ? "–" : "\(link.noise)"
+        let snr = level == .unknown ? "–" : "\(link.snr)"
         return HStack {
-            Text("Noise \(link.noise) · SNR \(link.snr)")
+            Text("Noise \(noise) · SNR \(snr)")
             Spacer()
-            Text(levelWord(level)).foregroundStyle(levelColor(level))
+            if level != .unknown {
+                Text(levelWord(level)).foregroundStyle(levelColor(level))
+            }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Noise \(noise), SNR \(snr), \(levelWord(level))")
     }
 
     private func levelColor(_ level: QualityLevel) -> Color {
@@ -151,7 +165,7 @@ struct MenuContentView: View {
         case .good: "good"
         case .fair: "fair"
         case .poor: "poor"
-        case .unknown: ""
+        case .unknown: "unknown"
         }
     }
 
@@ -164,10 +178,9 @@ struct MenuContentView: View {
     }
 
     private func channelLine(_ link: LinkSnapshot) -> String {
-        var parts = ["Ch \(link.channel.number) (\(bandName(link.channel.band)), \(link.channel.widthMHz) MHz)"]
-        if let generation = link.generation { parts.append("Wi-Fi \(generation.rawValue)") }
-        parts.append("\(Int(link.txRateMbps.rounded())) Mbps")
-        return parts.joined(separator: " · ")
+        // The Wi-Fi generation is in the chip beside the network name.
+        "Ch \(link.channel.number) (\(bandName(link.channel.band)), \(link.channel.widthMHz) MHz)"
+            + " · \(Int(link.txRateMbps.rounded())) Mbps"
     }
 
     private func accessPointText(_ address: MACAddress?) -> String {
@@ -195,11 +208,13 @@ struct MenuContentView: View {
 
     private func row(_ title: String, _ value: String, level: QualityLevel, tintValue: Bool = false) -> some View {
         HStack(spacing: 6) {
-            Circle().fill(levelColor(level)).frame(width: 8, height: 8)
+            Circle().fill(levelColor(level)).frame(width: 8, height: 8).accessibilityHidden(true)
             Text(title)
             Spacer()
             Text(value).foregroundStyle(tintValue ? levelColor(level) : .primary)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title), \(value), \(levelWord(level))")
     }
 
     private func internetText(_ net: ConnectivitySnapshot) -> String {
