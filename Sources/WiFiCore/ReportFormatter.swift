@@ -84,6 +84,8 @@ public func formatReport(_ snapshot: Snapshot, vendors: VendorLookup, now: Date)
     }
     lines.append("DNS: \(list(net.dnsServers)), latency \(net.dnsBlocked ? "blocked" : millis(net.dnsLatencyMs))")
     lines.append("Internet: \(internetText(net.internet)), latency \(millis(net.internetLatencyMs))")
+    lines.append("DNS answers: \(dnsAnswersText(net.dnsAnswers))")
+    lines.append("HTTPS (apple.com): \(httpsText(net.https))")
     lines.append("IPv4: \(list(net.ipv4))")
     lines.append("IPv6: \(list(net.ipv6))")
     lines.append("Public IP: \(net.publicIP ?? "n/a")")

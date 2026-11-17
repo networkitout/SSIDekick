@@ -48,4 +48,10 @@ import Foundation
         #expect(snapshot.connectivity == ConnectivitySnapshot())
         #expect(ConnectivitySnapshot().internet == .unknown)
     }
+
+    @Test func connectivityDefaultsToNotChecked() {
+        let c = ConnectivitySnapshot()
+        #expect(c.dnsAnswers == .notChecked)
+        #expect(c.https == .notChecked)
+    }
 }

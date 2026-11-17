@@ -88,4 +88,19 @@ import Foundation
         #expect(text.contains("Vendor table not installed — vendor checks are off."))
         #expect(!formatReport(connected(), vendors: vendors, now: now).contains("Vendor table not installed"))
     }
+
+    @Test func reportListsDNSAnswersAndHTTPSRowsAfterInternet() {
+        var snapshot = connected()
+        snapshot.connectivity.dnsAnswers = .tampered(name: "dns.google", address: "172.19.0.1",
+                                                     expected: ["8.8.8.8", "8.8.4.4"])
+        snapshot.connectivity.https = .decryptable(root: "Demo Inspection CA")
+        let lines = formatReport(snapshot, vendors: vendors, now: now).components(separatedBy: "\n")
+        let internet = lines.firstIndex { $0.hasPrefix("Internet:") }!
+        #expect(lines[internet + 1] == "DNS answers: tampered · dns.google → 172.19.0.1")
+        #expect(lines[internet + 2] == "HTTPS (apple.com): can be decrypted · root \"Demo Inspection CA\"")
+    }
+
+    @Test func defaultReportSaysNotChecked() {
+        #expect(formatReport(connected(), vendors: vendors, now: now).contains("DNS answers: not checked"))
+    }
 }

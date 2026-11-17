@@ -22,6 +22,11 @@ import WiFiCore
         #expect(notificationContent(for: finding(.dnsChanged, bssid: nil)).title == "DNS servers changed: Cafe")
     }
 
+    @Test func dnsTamperedTitle() {
+        let f = Finding(signal: .dnsTampered, ssid: "InflightWiFi", bssid: nil, reason: "r")
+        #expect(notificationContent(for: f).title == "DNS answers tampered: InflightWiFi")
+    }
+
     @Test func identifierIsStableAndDistinguishes() {
         let a = notificationContent(for: finding(.clonedAddress))
         #expect(a.identifier == notificationContent(for: finding(.clonedAddress)).identifier)

@@ -7,7 +7,7 @@ public enum DNSLookup: Sendable, Equatable {
     case failed
 }
 
-public enum DNSAnswersState: Sendable, Equatable {
+public enum DNSAnswersState: Sendable, Hashable {
     case notChecked, off, noAnswer
     case asExpected
     case filtered
@@ -16,7 +16,7 @@ public enum DNSAnswersState: Sendable, Equatable {
     case tampered(name: String, address: String, expected: [String])
 }
 
-public enum HTTPSState: Sendable, Equatable {
+public enum HTTPSState: Sendable, Hashable {
     case notChecked, off, noAnswer
     case direct
     case decryptable(root: String)

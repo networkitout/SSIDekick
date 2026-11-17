@@ -18,6 +18,7 @@ public func notificationContent(for finding: Finding) -> NotificationContent {
     switch finding.signal {
     case .gatewayChanged: title = "Gateway changed: \(finding.ssid)"
     case .dnsChanged: title = "DNS servers changed: \(finding.ssid)"
+    case .dnsTampered: title = "DNS answers tampered: \(finding.ssid)"
     default:
         title = finding.signal.strength == .strong ? "Suspect twin: \(finding.ssid)" : "Worth a look: \(finding.ssid)"
     }

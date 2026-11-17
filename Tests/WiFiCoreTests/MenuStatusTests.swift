@@ -133,4 +133,28 @@ private let antenna = "antenna.radiowaves.left.and.right"
                                                                  finding(.dnsChanged, bssid: nil)], verdict: .suspect))
                 == "WiFiUtil: 1 worth a look; DNS servers changed")
     }
+
+@Suite struct DNSAnswersWarningTests {
+    @Test func tamperedOnlyGivesOneSuspectLine() {
+        let s = snapshot(findings: [finding(.dnsTampered, bssid: nil)], verdict: .suspect)
+        #expect(warningLines(for: s) == [WarningLine(text: "DNS answers tampered", verdict: .suspect)])
+        #expect(connectionWarning(for: s) == nil)
+        #expect(statusGlyph(for: s) == StatusGlyph(symbol: antenna, tint: .red))
+        #expect(statusAccessibilityLabel(for: s) == "WiFiUtil: DNS answers tampered")
+    }
+    @Test func verdictComesFromNetworkVerdict() {
+        let findings = [finding(.dnsTampered, bssid: nil)]
+        #expect(networkVerdict(ssid: "Net", findings: findings) == .suspect)
+    }
+    @Test func followsGatewayLine() {
+        let s = snapshot(findings: [finding(.gatewayChanged, bssid: nil), finding(.dnsTampered, bssid: nil)],
+                         verdict: .suspect)
+        #expect(warningLines(for: s).map(\.text) == ["Gateway changed", "DNS answers tampered"])
+    }
+    @Test func otherNetworkOrNoFindingGivesNil() {
+        #expect(dnsAnswersWarning(for: snapshot()) == nil)
+        let s = snapshot(findings: [finding(.dnsTampered, ssid: "Else", bssid: nil)])
+        #expect(dnsAnswersWarning(for: s) == nil)
+    }
+}
 }

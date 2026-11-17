@@ -19,6 +19,8 @@ public struct ConnectivitySnapshot: Sendable, Hashable {
     public var ipv4: [String]
     public var ipv6: [String]
     public var publicIP: String?
+    public var dnsAnswers: DNSAnswersState
+    public var https: HTTPSState
 
     public init() {
         gatewayIP = nil
@@ -34,6 +36,8 @@ public struct ConnectivitySnapshot: Sendable, Hashable {
         ipv4 = []
         ipv6 = []
         publicIP = nil
+        dnsAnswers = .notChecked
+        https = .notChecked
     }
 }
 

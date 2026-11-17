@@ -78,9 +78,17 @@ public func connectionWarning(for snapshot: Snapshot) -> WarningLine? {
     return WarningLine(text: text, verdict: bucket)
 }
 
-/// The menu's warning lines: the twin line, then the connection line; empty below "worth a look".
+/// The DNS answers line, when a tampered answer was found on the connected network.
+public func dnsAnswersWarning(for snapshot: Snapshot) -> WarningLine? {
+    guard let ssid = snapshot.link?.ssid,
+          connectionFindings(ssid: ssid, in: snapshot.findings).contains(where: { $0.signal == .dnsTampered })
+    else { return nil }
+    return WarningLine(text: "DNS answers tampered", verdict: .suspect)
+}
+
+/// The menu's warning lines: the twin line, the connection line, then the DNS answers line; empty below "worth a look".
 public func warningLines(for snapshot: Snapshot) -> [WarningLine] {
-    [twinWarning(for: snapshot), connectionWarning(for: snapshot)].compactMap { $0 }
+    [twinWarning(for: snapshot), connectionWarning(for: snapshot), dnsAnswersWarning(for: snapshot)].compactMap { $0 }
 }
 
 /// The menu bar icon's accessibility label, following the same wording as the glyph and the warning lines.

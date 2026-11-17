@@ -6,13 +6,16 @@ public struct ConnectionState: Sendable, Hashable {
     public var rssi: Int
     public var gatewayMAC: MACAddress?
     public var dnsServers: [String]
+    public var dnsAnswers: DNSAnswersState
 
-    public init(ssid: String, bssid: MACAddress, rssi: Int, gatewayMAC: MACAddress?, dnsServers: [String]) {
+    public init(ssid: String, bssid: MACAddress, rssi: Int, gatewayMAC: MACAddress?, dnsServers: [String],
+                dnsAnswers: DNSAnswersState = .notChecked) {
         self.ssid = ssid
         self.bssid = bssid
         self.rssi = rssi
         self.gatewayMAC = gatewayMAC
         self.dnsServers = dnsServers
+        self.dnsAnswers = dnsAnswers
     }
 }
 
@@ -53,6 +56,7 @@ public struct ConnectionMonitor: Sendable {
 
         checkGateway(connection.gatewayMAC, name: name, now: now)
         checkDNS(connection.dnsServers, name: name, now: now)
+        checkDNSAnswers(connection.dnsAnswers, name: name)
         if let scan { checkScan(scan, connection: connection) }
         if let previous = lastBSSID, previous != connection.bssid {
             checkMove(to: connection.bssid, name: name, siblingFindings: siblingFindings)
@@ -115,6 +119,13 @@ public struct ConnectionMonitor: Sendable {
             raise(Finding(signal: .dnsChanged, ssid: name, bssid: nil,
                           reason: "The DNS servers changed after the connection settled."))
         }
+    }
+
+    /// Only a tampered answer raises; the finding stays until the session ends.
+    private mutating func checkDNSAnswers(_ state: DNSAnswersState, name: String) {
+        guard case let .tampered(host, address, expected) = state else { return }
+        raise(Finding(signal: .dnsTampered, ssid: name, bssid: nil,
+                      reason: "\(host) resolved to \(address) (expected \(expected.joined(separator: " or ")))."))
     }
 
     /// The first `newcomerBaselineScans` scans of a session build the baseline (one scan often misses an access

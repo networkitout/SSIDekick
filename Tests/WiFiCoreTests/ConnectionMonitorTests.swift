@@ -20,8 +20,9 @@ private func baseline(_ m: inout ConnectionMonitor, _ scans: [[AccessPoint]] = [
 private let t4 = t0 + 240
 
 private func conn(_ ssid: String = "Home", _ bssid: MACAddress = X, rssi: Int = -60,
-                  gw: String? = nil, dns: [String] = []) -> ConnectionState {
-    ConnectionState(ssid: ssid, bssid: bssid, rssi: rssi, gatewayMAC: gw.flatMap { MACAddress($0) }, dnsServers: dns)
+                  gw: String? = nil, dns: [String] = [], answers: DNSAnswersState = .notChecked) -> ConnectionState {
+    ConnectionState(ssid: ssid, bssid: bssid, rssi: rssi, gatewayMAC: gw.flatMap { MACAddress($0) }, dnsServers: dns,
+                    dnsAnswers: answers)
 }
 
 struct ConnectionMonitorTests {
@@ -289,5 +290,45 @@ struct ConnectionMonitorTests {
         _ = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 31)
         let out = m.update(connection: conn(gw: "00:11:22:33:44:02"), scan: nil, siblingFindings: [], now: t0 + 32)
         #expect(out.filter { $0.signal == .gatewayChanged }.count == 1)
+    }
+
+    private static let tampered = DNSAnswersState.tampered(name: "dns.google", address: "172.19.0.1",
+                                                           expected: ["8.8.8.8", "8.8.4.4"])
+
+    @Test func tamperedAnswerRaisesOneConnectionFinding() {
+        var m = ConnectionMonitor()
+        let out = m.update(connection: conn(answers: Self.tampered), scan: nil, siblingFindings: [], now: t0)
+        #expect(out.map(\.signal) == [.dnsTampered])
+        #expect(out[0].bssid == nil)
+        #expect(out[0].ssid == "Home")
+        #expect(out[0].reason == "dns.google resolved to 172.19.0.1 (expected 8.8.8.8 or 8.8.4.4).")
+        _ = m.update(connection: conn(answers: Self.tampered), scan: nil, siblingFindings: [], now: t0 + 60)
+        let again = m.update(connection: conn(answers: Self.tampered), scan: nil, siblingFindings: [], now: t0 + 120)
+        #expect(again.count == 1)
+    }
+
+    @Test func tamperedFindingSurvivesLaterAsExpected() {
+        var m = ConnectionMonitor()
+        _ = m.update(connection: conn(answers: Self.tampered), scan: nil, siblingFindings: [], now: t0)
+        let out = m.update(connection: conn(answers: .asExpected), scan: nil, siblingFindings: [], now: t0 + 60)
+        #expect(out.map(\.signal) == [.dnsTampered])
+    }
+
+    @Test func newNetworkClearsTamperedFinding() {
+        var m = ConnectionMonitor()
+        _ = m.update(connection: conn(answers: Self.tampered), scan: nil, siblingFindings: [], now: t0)
+        let out = m.update(connection: conn("Other"), scan: nil, siblingFindings: [], now: t0 + 60)
+        #expect(out.isEmpty)
+    }
+
+    @Test func otherAnswerStatesRaiseNothing() {
+        let states: [DNSAnswersState] = [.notChecked, .off, .noAnswer, .asExpected, .filtered,
+                                         .filteredByYourServer(name: "x.test", address: "0.0.0.0"),
+                                         .rewritten(address: "10.0.0.1")]
+        for state in states {
+            var m = ConnectionMonitor()
+            let out = m.update(connection: conn(answers: state), scan: nil, siblingFindings: [], now: t0)
+            #expect(out.isEmpty)
+        }
     }
 }

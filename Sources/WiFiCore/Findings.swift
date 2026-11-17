@@ -8,7 +8,7 @@ public enum Strength: Int, Sendable, Comparable {
 
 public enum Signal: String, Sendable, CaseIterable {
     // strong
-    case securityMismatch, clonedAddress, gatewayChanged, dnsChanged
+    case securityMismatch, clonedAddress, gatewayChanged, dnsChanged, dnsTampered
     // medium
     case vendorMismatch, louderNewcomer, movedToFlagged
     // weak
@@ -16,7 +16,7 @@ public enum Signal: String, Sendable, CaseIterable {
 
     public var strength: Strength {
         switch self {
-        case .securityMismatch, .clonedAddress, .gatewayChanged, .dnsChanged: .strong
+        case .securityMismatch, .clonedAddress, .gatewayChanged, .dnsChanged, .dnsTampered: .strong
         case .vendorMismatch, .louderNewcomer, .movedToFlagged: .medium
         case .locallyAdministered, .countryMismatch, .beaconMismatch, .generationMismatch: .weak
         }
