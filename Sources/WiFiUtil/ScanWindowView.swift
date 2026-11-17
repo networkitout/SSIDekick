@@ -80,6 +80,8 @@ private struct NetworksTab: View {
     let revealRequests: Int
     /// Groups the user has toggled; absent means the default (the connected group is open).
     @State private var toggled: [String: Bool] = [:]
+    /// Devices the user has toggled, by device id; absent means the default (open only for the connected radio's device).
+    @State private var toggledDevices: [String: Bool] = [:]
 
     var body: some View {
         if !snapshot.locationAuthorized {
@@ -151,12 +153,68 @@ private struct NetworksTab: View {
                             .padding(.leading, 22).padding(.vertical, 2)
                     }
                 }
-                ForEach(Array(group.accessPoints.enumerated()), id: \.offset) { _, accessPoint in
-                    row(accessPoint)
+                let devices = groupDevices(group.accessPoints, findings: snapshot.findings)
+                ForEach(devices) { device in
+                    if device.isSingleRadio {
+                        row(device.accessPoints[0])
+                    } else {
+                        deviceView(device, in: group)
+                    }
                 }
             }
             Divider()
         }
+    }
+
+    private struct RadioRow: Identifiable {
+        let offset: Int
+        let accessPoint: AccessPoint
+        var id: String { accessPoint.bssid?.description ?? "none-\(offset)" }
+    }
+
+    private func isExpanded(_ device: DeviceGroup, in group: NetworkGroup) -> Bool {
+        if let toggled = toggledDevices[device.id] { return toggled }
+        guard group.isConnected, let connected = snapshot.link?.bssid else { return false }
+        return device.accessPoints.contains { $0.bssid == connected }
+    }
+
+    private func deviceView(_ device: DeviceGroup, in group: NetworkGroup) -> some View {
+        let expanded = isExpanded(device, in: group)
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                toggledDevices[device.id] = !expanded
+            } label: {
+                deviceHeader(device, expanded: expanded)
+            }
+            .buttonStyle(.plain)
+            .help("Probably one device: same maker prefix and neighbouring addresses")
+            if expanded {
+                // Addresses are unique within a device; only a missing address falls back to its position.
+                ForEach(device.accessPoints.enumerated().map { RadioRow(offset: $0.offset, accessPoint: $0.element) }) {
+                    row($0.accessPoint, indent: 44)
+                }
+            }
+        }
+    }
+
+    private func deviceHeader(_ device: DeviceGroup, expanded: Bool) -> some View {
+        let vendor = device.accessPoints.compactMap(\.bssid).min { $0.bytes.lexicographicallyPrecedes($1.bytes) }
+            .flatMap { vendors.vendor(for: $0) } ?? "–"
+        return HStack(spacing: 8) {
+            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                .frame(width: 12).foregroundStyle(.secondary)
+            Image(systemName: "wifi.router").foregroundStyle(.secondary)
+            Text(device.addressPattern).frame(width: Col.address - 34, alignment: .leading)
+            Text(vendor).lineLimit(1).frame(width: Col.vendor, alignment: .leading)
+            Text(device.bands.map(bandName).joined(separator: " · "))
+                .frame(width: Col.channel + Col.band, alignment: .leading)
+            Text("\(device.accessPoints.count) radios").foregroundStyle(.secondary)
+            Spacer()
+            Text("\(device.strongestRSSI) dBm")
+        }
+        .font(.system(size: 12).monospacedDigit())
+        .padding(.vertical, 4).padding(.leading, 22)
+        .contentShape(Rectangle())
     }
 
     private func groupHeader(_ group: NetworkGroup) -> some View {
@@ -165,7 +223,9 @@ private struct NetworksTab: View {
                 .frame(width: 12).foregroundStyle(.secondary)
             Text(group.ssid ?? "Hidden network").font(.system(size: 13, weight: .semibold))
             if group.isConnected { Text("connected").font(.caption).foregroundStyle(.secondary) }
-            Text("\(group.accessPoints.count) \(group.accessPoints.count == 1 ? "access point" : "access points")")
+            Text(group.ssid == nil
+                 ? "1 access point"
+                 : devicesSummary(groupDevices(group.accessPoints, findings: snapshot.findings)))
                 .font(.caption).foregroundStyle(.secondary)
             Spacer()
             switch group.verdict {
@@ -178,7 +238,7 @@ private struct NetworksTab: View {
         .contentShape(Rectangle())
     }
 
-    private func row(_ accessPoint: AccessPoint) -> some View {
+    private func row(_ accessPoint: AccessPoint, indent: CGFloat = 22) -> some View {
         let mine = findings(for: accessPoint, in: snapshot.findings)
         let rowVerdict = verdict(for: mine)
         return VStack(alignment: .leading, spacing: 2) {
@@ -201,7 +261,7 @@ private struct NetworksTab: View {
             }
         }
         .font(.system(size: 12).monospacedDigit())
-        .padding(.vertical, 4).padding(.leading, 22)
+        .padding(.vertical, 4).padding(.leading, indent)
         .background(tint(for: rowVerdict)?.opacity(0.15) ?? .clear)
     }
 
