@@ -8,7 +8,9 @@ identity="${SIGN_IDENTITY:-Apple Development}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
-if ! security find-identity -v -p codesigning | grep -qF -- "$identity"; then
+# Captured first: under pipefail, grep -q closing the pipe early could fail the pipeline even on a match.
+identities="$(security find-identity -v -p codesigning)"
+if ! grep -qF -- "$identity" <<<"$identities"; then
     echo "error: no valid code signing identity matching \"$identity\" in the keychain." >&2
     echo "Set SIGN_IDENTITY to one listed by: security find-identity -v -p codesigning" >&2
     exit 1

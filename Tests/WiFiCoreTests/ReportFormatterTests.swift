@@ -46,8 +46,13 @@ import Foundation
 
     @Test func locationDeniedHidesNamesAndAddresses() {
         let finding = Finding(signal: .vendorMismatch, ssid: "Home", bssid: MACAddress(otherAddress), reason: "x")
-        let text = formatReport(connected(authorized: false, findings: [finding]), vendors: vendors, now: now)
+        var snapshot = connected(authorized: false, findings: [finding])
+        snapshot.connectivity.gatewayIP = "192.168.1.1"
+        snapshot.connectivity.gatewayMAC = MACAddress("00:14:6c:aa:00:01")
+        let text = formatReport(snapshot, vendors: vendors, now: now)
         #expect(text.contains("hidden (Location Services off)"))
+        #expect(!text.contains("00:14:6c:aa:00:01"))
+        #expect(text.contains("Gateway: 192.168.1.1, address hidden (Location Services off)"))
         #expect(!text.contains(linkAddress))
         #expect(!text.contains(otherAddress))
         #expect(!text.contains("Home"))
