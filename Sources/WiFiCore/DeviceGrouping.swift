@@ -28,6 +28,7 @@ private let deviceAddressSpan = 15
 
 /// Folds one network's access points into devices. Radios with no address, or with a finding, stay alone.
 /// Order: the device with the strongest radio first, then by strongest signal, then by id.
+/// Every returned `id` is unique within one call, for any input.
 public func groupDevices(_ accessPoints: [AccessPoint], findings: [Finding]) -> [DeviceGroup] {
     var devices: [DeviceGroup] = []
     var keyed: [[UInt8]: [(AccessPoint, MACAddress)]] = [:]
@@ -53,8 +54,30 @@ public func groupDevices(_ accessPoints: [AccessPoint], findings: [Finding]) -> 
         }
         if let lowest = current.first { devices.append(makeDevice(id: lowest.1.description, current.map(\.0))) }
     }
-    return devices.sorted { a, b in
-        a.strongestRSSI != b.strongestRSSI ? a.strongestRSSI > b.strongestRSSI : a.id < b.id
+    let ordered = devices.sorted { a, b in
+        if a.strongestRSSI != b.strongestRSSI { return a.strongestRSSI > b.strongestRSSI }
+        if a.id != b.id { return a.id < b.id }
+        return a.accessPoints[0].channel.number < b.accessPoints[0].channel.number
+    }
+    return uniqueIDs(ordered)
+}
+
+/// Makes every id distinct: the address, else "<address>@<channel>", else "<address>@<channel>#<n>".
+/// Deterministic for the same input, so two entries for one address (a cloned address on two channels, say) never
+/// share an id.
+private func uniqueIDs(_ devices: [DeviceGroup]) -> [DeviceGroup] {
+    var used: Set<String> = []
+    return devices.map { device in
+        var device = device
+        let base = device.id
+        var candidate = base
+        if used.contains(candidate) { candidate = "\(base)@\(device.accessPoints[0].channel.number)" }
+        var n = 2
+        let withChannel = candidate
+        while used.contains(candidate) { candidate = "\(withChannel)#\(n)"; n += 1 }
+        used.insert(candidate)
+        device.id = candidate
+        return device
     }
 }
 

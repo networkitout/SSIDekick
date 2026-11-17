@@ -55,6 +55,7 @@ import Testing
         #expect(devices.count == 2)
         #expect(devices.allSatisfy { $0.isSingleRadio })
         #expect(devices.allSatisfy { $0.addressPattern == "–" })
+        #expect(devices[0].id != devices[1].id)
     }
 
     @Test func differentByteFourIsSeparate() {
@@ -80,5 +81,30 @@ import Testing
         #expect(devicesSummary([device(1, 1), device(1, 2)]) == "2 radios on 2 devices")
         #expect(devicesSummary([]) == "0 radios on 0 devices")
         #expect(groupDevices([], findings: []).isEmpty)
+    }
+
+    private func ids(_ aps: [AccessPoint], findings: [Finding] = []) -> [String] {
+        groupDevices(aps, findings: findings).map(\.id)
+    }
+
+    @Test func clonedAddressOnTwoChannelsGivesDistinctIds() {
+        let a = ap("Home", "a4:b1:c2:00:01:10", rssi: -50, ch: 36)
+        let b = ap("Home", "a4:b1:c2:00:01:10", rssi: -60, ch: 149)
+        let finding = Finding(signal: .clonedAddress, ssid: "Home", bssid: a.bssid, reason: "seen on two channels")
+        let devices = groupDevices([a, b], findings: [finding])
+        #expect(devices.count == 2)
+        #expect(Set(devices.map(\.id)).count == 2)
+        #expect(ids([a, b], findings: [finding]) == ids([a, b], findings: [finding]))
+    }
+
+    @Test func sameAddressSameChannelStillGivesDistinctIds() {
+        let a = ap("Home", "a4:b1:c2:00:01:10", rssi: -50, ch: 36)
+        let b = ap("Home", "a4:b1:c2:00:01:10", rssi: -60, ch: 36)
+        let c = ap("Home", "a4:b1:c2:00:01:10", rssi: -70, ch: 36)
+        let finding = Finding(signal: .clonedAddress, ssid: "Home", bssid: a.bssid, reason: "dup")
+        let flagged = ids([a, b, c], findings: [finding])
+        #expect(flagged.count == 3 && Set(flagged).count == 3)
+        let plain = ids([a, b, c])
+        #expect(Set(plain).count == plain.count)
     }
 }

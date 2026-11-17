@@ -167,9 +167,18 @@ private struct NetworksTab: View {
     }
 
     private struct RadioRow: Identifiable {
-        let offset: Int
+        let id: String
         let accessPoint: AccessPoint
-        var id: String { accessPoint.bssid?.description ?? "none-\(offset)" }
+    }
+
+    /// Rows with ids that are unique within the device: address and channel, plus "#n" if still repeated.
+    private func radioRows(_ device: DeviceGroup) -> [RadioRow] {
+        var seen: [String: Int] = [:]
+        return device.accessPoints.enumerated().map { offset, accessPoint in
+            let base = "\(accessPoint.bssid?.description ?? "none-\(offset)")@\(accessPoint.channel.number)"
+            seen[base, default: 0] += 1
+            return RadioRow(id: seen[base] == 1 ? base : "\(base)#\(seen[base]!)", accessPoint: accessPoint)
+        }
     }
 
     private func isExpanded(_ device: DeviceGroup, in group: NetworkGroup) -> Bool {
@@ -189,8 +198,7 @@ private struct NetworksTab: View {
             .buttonStyle(.plain)
             .help("Probably one device: same maker prefix and neighbouring addresses")
             if expanded {
-                // Addresses are unique within a device; only a missing address falls back to its position.
-                ForEach(device.accessPoints.enumerated().map { RadioRow(offset: $0.offset, accessPoint: $0.element) }) {
+                ForEach(radioRows(device)) {
                     row($0.accessPoint, indent: 44)
                 }
             }
