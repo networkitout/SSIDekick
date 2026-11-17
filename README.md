@@ -1,0 +1,78 @@
+# WiFiUtil
+
+A macOS menu bar app (macOS 15+) that shows Wi-Fi quality and connectivity and flags duplicate SSIDs
+(possible evil twins).
+
+## Building for yourself
+
+```bash
+scripts/build-app.sh
+```
+
+This builds `build/WiFiUtil.app` as a universal binary (Apple silicon and Intel), signed with the
+hardened runtime and `Support/WiFiUtil.entitlements`. It uses your `Apple Development` identity by
+default; set `SIGN_IDENTITY` to use another one from `security find-identity -v -p codesigning`.
+
+A build signed with `Apple Development` runs on your own Mac. Gatekeeper blocks it on other Macs.
+
+## Releasing to other people's Macs
+
+To run on other Macs without Gatekeeper blocking it, the app must be signed with a
+**Developer ID Application** certificate and **notarized** by Apple. `scripts/release.sh` does both,
+once the one-time setup below is done.
+
+### One-time setup
+
+1. **Join the Apple Developer Program** (paid) with the Apple ID you develop with.
+2. **Create a Developer ID Application certificate**: Xcode > Settings > Accounts > select your team >
+   Manage Certificates > **+** > *Developer ID Application*. Check it is in the keychain:
+
+   ```bash
+   security find-identity -v -p codesigning
+   ```
+
+   The list should include `Developer ID Application: <Your Name> (<TEAMID>)`. Back up the
+   certificate with its private key (export a .p12 from Keychain Access). Without the key you can't
+   sign updates with the same identity.
+3. **Store notary credentials in the keychain.** Create an app-specific password at
+   [account.apple.com](https://account.apple.com) (Sign-In and Security > App-Specific Passwords),
+   then run:
+
+   ```bash
+   xcrun notarytool store-credentials wifiutil-notary --apple-id "<your Apple ID>" --team-id "<TEAMID>"
+   ```
+
+   It prompts for the app-specific password and saves everything in your login keychain under the
+   profile name `wifiutil-notary`. Credentials never go in this repository. To use another profile
+   name, set `NOTARY_PROFILE` when running the release script.
+4. **Choose the bundle identifier** (see below) before the first public release.
+
+### Each release
+
+1. Bump `CFBundleShortVersionString` (and `CFBundleVersion`) in `Support/Info.plist`.
+2. Run:
+
+   ```bash
+   scripts/release.sh
+   ```
+
+   The script signs with your Developer ID identity (set `SIGN_IDENTITY` if you have more than one),
+   submits to Apple's notary service and waits, staples the ticket to the app, checks it with
+   `spctl`, and prints the path of `build/release/WiFiUtil-<version>.zip`. Ship that zip.
+3. If notarization is rejected, the script prints the `xcrun notarytool log …` command that shows why.
+
+### Bundle identifier
+
+The app's bundle identifier is still the placeholder `local.wifiutil.WiFiUtil` (in
+`Support/Info.plist`). Before the first public release, replace it with a reverse-DNS identifier on a
+domain you control, for example `com.example.WiFiUtil`.
+
+Pick it once. macOS records Location Services and notification permissions per bundle identifier, so
+changing it after release resets those permissions for every user. Each user then has to grant
+Location access again before the app can show network names.
+
+## Entitlements
+
+The app is not sandboxed. Under the hardened runtime it needs a single entitlement,
+`com.apple.security.personal-information.location`, because macOS only reveals Wi-Fi network names
+and BSSIDs to apps with Location access.
