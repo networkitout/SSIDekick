@@ -19,41 +19,46 @@ private func snapshot(state: WiFiState = .connected, link: LinkSnapshot? = link(
                     scanTime: nil, scanError: nil, findings: findings, connectedVerdict: verdict)
 }
 
+private let antenna = "antenna.radiowaves.left.and.right"
+
 @Suite struct StatusGlyphTests {
-    @Test func clearConnectionIsPlainWiFi() {
-        #expect(statusGlyph(for: snapshot()) == StatusGlyph(symbol: "wifi", tint: .normal))
+    @Test func clearConnectionIsPlainAntenna() {
+        #expect(statusGlyph(for: snapshot()) == StatusGlyph(symbol: antenna, tint: .normal))
     }
     @Test func noteStaysPlain() {
-        #expect(statusGlyph(for: snapshot(verdict: .note)) == StatusGlyph(symbol: "wifi", tint: .normal))
+        #expect(statusGlyph(for: snapshot(verdict: .note)) == StatusGlyph(symbol: antenna, tint: .normal))
     }
     @Test func worthALookIsOrange() {
-        #expect(statusGlyph(for: snapshot(verdict: .worthALook)) == StatusGlyph(symbol: "wifi", tint: .orange))
+        #expect(statusGlyph(for: snapshot(verdict: .worthALook)) == StatusGlyph(symbol: antenna, tint: .orange))
     }
     @Test func suspectIsRed() {
-        #expect(statusGlyph(for: snapshot(verdict: .suspect)) == StatusGlyph(symbol: "wifi", tint: .red))
+        #expect(statusGlyph(for: snapshot(verdict: .suspect)) == StatusGlyph(symbol: antenna, tint: .red))
     }
     @Test func offIsSlashed() {
-        #expect(statusGlyph(for: snapshot(state: .off, link: nil)) == StatusGlyph(symbol: "wifi.slash", tint: .normal))
+        #expect(statusGlyph(for: snapshot(state: .off, link: nil)) == StatusGlyph(symbol: antenna + ".slash", tint: .normal))
     }
     @Test func notConnectedIsSlashed() {
-        #expect(statusGlyph(for: snapshot(state: .notConnected, link: nil)).symbol == "wifi.slash")
+        #expect(statusGlyph(for: snapshot(state: .notConnected, link: nil))
+                == StatusGlyph(symbol: antenna + ".slash", tint: .normal))
     }
     @Test func connectedWithoutLinkIsSlashed() {
-        #expect(statusGlyph(for: snapshot(link: nil)).symbol == "wifi.slash")
+        #expect(statusGlyph(for: snapshot(link: nil)) == StatusGlyph(symbol: antenna + ".slash", tint: .normal))
     }
-    @Test func offlineShowsExclamationMark() {
+    @Test func offlineIsCircledAndDimmed() {
         #expect(statusGlyph(for: snapshot(internet: .offline))
-                == StatusGlyph(symbol: "wifi.exclamationmark", tint: .normal))
+                == StatusGlyph(symbol: antenna + ".circle", tint: .dimmed))
+        #expect(statusGlyph(for: snapshot(internet: .offline, verdict: .note))
+                == StatusGlyph(symbol: antenna + ".circle", tint: .dimmed))
     }
     @Test func captivePortalAndUnknownAreNotOffline() {
-        #expect(statusGlyph(for: snapshot(internet: .captivePortal)).symbol == "wifi")
-        #expect(statusGlyph(for: snapshot(internet: .unknown)).symbol == "wifi")
+        #expect(statusGlyph(for: snapshot(internet: .captivePortal)) == StatusGlyph(symbol: antenna, tint: .normal))
+        #expect(statusGlyph(for: snapshot(internet: .unknown)) == StatusGlyph(symbol: antenna, tint: .normal))
     }
-    @Test func twinColourWinsOverExclamationMark() {
+    @Test func twinColourWinsOverOffline() {
         #expect(statusGlyph(for: snapshot(internet: .offline, verdict: .worthALook))
-                == StatusGlyph(symbol: "wifi", tint: .orange))
+                == StatusGlyph(symbol: antenna, tint: .orange))
         #expect(statusGlyph(for: snapshot(internet: .offline, verdict: .suspect))
-                == StatusGlyph(symbol: "wifi", tint: .red))
+                == StatusGlyph(symbol: antenna, tint: .red))
     }
 }
 

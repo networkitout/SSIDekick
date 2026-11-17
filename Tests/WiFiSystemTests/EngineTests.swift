@@ -224,20 +224,20 @@ struct EngineTests {
         let plane = makeDemoEngine(.planeTwin, recorder: recorder)
         plane.refreshLink()
         await plane.scanNow()
-        #expect(statusGlyph(for: plane.snapshot) == StatusGlyph(symbol: "wifi", tint: .orange))
+        #expect(statusGlyph(for: plane.snapshot) == StatusGlyph(symbol: "antenna.radiowaves.left.and.right", tint: .orange))
         #expect(warningLines(for: plane.snapshot).map(\.text) == ["⚠ 1 worth a look"])
 
         let office = makeDemoEngine(.office, recorder: recorder)
         office.refreshLink()
         await office.refreshProbes()
         await office.scanNow()
-        #expect(statusGlyph(for: office.snapshot) == StatusGlyph(symbol: "wifi", tint: .normal))
+        #expect(statusGlyph(for: office.snapshot) == StatusGlyph(symbol: "antenna.radiowaves.left.and.right", tint: .normal))
         #expect(warningLines(for: office.snapshot).isEmpty)
 
         let off = makeDemoEngine(.wifiOff, recorder: recorder)
         off.refreshLink()
         await off.refreshProbes()
-        #expect(statusGlyph(for: off.snapshot).symbol == "wifi.slash")
+        #expect(statusGlyph(for: off.snapshot).symbol == "antenna.radiowaves.left.and.right.slash")
 
         let denied = makeDemoEngine(.locationDenied, recorder: recorder)
         denied.refreshLink()

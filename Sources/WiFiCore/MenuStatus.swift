@@ -1,7 +1,7 @@
 import Foundation
 
-/// Colour of the menu bar glyph. `normal` follows the menu bar's own colour.
-public enum StatusTint: Sendable, Equatable { case normal, orange, red }
+/// Colour of the menu bar glyph. `normal` follows the menu bar's own colour; `dimmed` is the same, muted.
+public enum StatusTint: Sendable, Equatable { case normal, dimmed, orange, red }
 
 /// What the menu bar icon shows: an SF Symbol name and a tint.
 public struct StatusGlyph: Sendable, Equatable {
@@ -14,21 +14,28 @@ public struct StatusGlyph: Sendable, Equatable {
     }
 }
 
+private let antennaSymbol = "antenna.radiowaves.left.and.right"
+
+/// Whether the Mac is on a Wi-Fi network; the antenna is slashed otherwise.
+private func isOnNetwork(_ snapshot: Snapshot) -> Bool {
+    snapshot.state == .connected && snapshot.link != nil
+}
+
 /// Slashed when Wi-Fi is off or not connected; otherwise coloured by the connected network's twin verdict,
-/// and only when that is clear (or a note) does a missing internet show as an exclamation mark.
+/// and only when that is clear (or a note) does a missing internet show as a circled, dimmed antenna.
 public func statusGlyph(for snapshot: Snapshot) -> StatusGlyph {
-    guard snapshot.state == .connected, snapshot.link != nil else {
-        return StatusGlyph(symbol: "wifi.slash", tint: .normal)
+    guard isOnNetwork(snapshot) else {
+        return StatusGlyph(symbol: antennaSymbol + ".slash", tint: .normal)
     }
     switch snapshot.connectedVerdict {
-    case .suspect: return StatusGlyph(symbol: "wifi", tint: .red)
-    case .worthALook: return StatusGlyph(symbol: "wifi", tint: .orange)
+    case .suspect: return StatusGlyph(symbol: antennaSymbol, tint: .red)
+    case .worthALook: return StatusGlyph(symbol: antennaSymbol, tint: .orange)
     case .clear, .note: break
     }
     if snapshot.connectivity.internet == .offline {
-        return StatusGlyph(symbol: "wifi.exclamationmark", tint: .normal)
+        return StatusGlyph(symbol: antennaSymbol + ".circle", tint: .dimmed)
     }
-    return StatusGlyph(symbol: "wifi", tint: .normal)
+    return StatusGlyph(symbol: antennaSymbol, tint: .normal)
 }
 
 /// One warning line in the menu, with the verdict that colours it.
@@ -77,18 +84,15 @@ public func warningLines(for snapshot: Snapshot) -> [WarningLine] {
 }
 
 /// The menu bar icon's accessibility label, following the same wording as the glyph and the warning lines.
+/// It reads the snapshot, never the symbol name.
 public func statusAccessibilityLabel(for snapshot: Snapshot) -> String {
-    let glyph = statusGlyph(for: snapshot)
-    switch glyph.tint {
-    case .red, .orange:
+    guard isOnNetwork(snapshot) else { return "WiFiUtil: not connected" }
+    switch snapshot.connectedVerdict {
+    case .suspect, .worthALook:
         let lines = warningLines(for: snapshot).map { String($0.text.drop { $0 == "⚠" || $0 == " " }) }
         if !lines.isEmpty { return "WiFiUtil: " + lines.joined(separator: "; ") }
-        return glyph.tint == .red ? "WiFiUtil: suspect" : "WiFiUtil: worth a look"
-    case .normal:
-        switch glyph.symbol {
-        case "wifi.slash": return "WiFiUtil: not connected"
-        case "wifi.exclamationmark": return "WiFiUtil: no internet"
-        default: return "WiFiUtil"
-        }
+        return snapshot.connectedVerdict == .suspect ? "WiFiUtil: suspect" : "WiFiUtil: worth a look"
+    case .clear, .note:
+        return snapshot.connectivity.internet == .offline ? "WiFiUtil: no internet" : "WiFiUtil"
     }
 }

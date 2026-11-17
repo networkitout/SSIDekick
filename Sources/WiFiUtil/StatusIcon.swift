@@ -19,6 +19,7 @@ struct StatusIcon: View {
         let color: NSColor
         switch glyph.tint {
         case .normal: return Image(systemName: glyph.symbol)
+        case .dimmed: color = .secondaryLabelColor
         case .orange: color = .systemOrange
         case .red: color = .systemRed
         }
