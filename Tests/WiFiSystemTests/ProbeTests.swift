@@ -73,6 +73,41 @@ import WiFiCore
         #expect(config.gatewayIP == nil)
     }
 
+    @Test func handSetDNSComesFromSetupServerAddresses() {
+        let handSet = networkConfig(fromService: nil, ipv6: nil, dns: nil,
+                                    setupDNS: ["ServerAddresses": ["192.168.1.2"]])
+        #expect(handSet.dnsServersSetByHand)
+        #expect(!networkConfig(fromService: nil, ipv6: nil, dns: nil, setupDNS: nil).dnsServersSetByHand)
+        #expect(!networkConfig(fromService: nil, ipv6: nil, dns: nil,
+                               setupDNS: ["ServerAddresses": [String]()]).dnsServersSetByHand)
+        #expect(!networkConfig(fromService: nil, ipv6: nil, dns: nil).dnsServersSetByHand)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func dnsLookupOverLoopbackParsesTheAnswer() async throws {
+        let responder = try #require(LoopbackDNSResponder())
+        let answer: [UInt8] = [0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2C, 0x00, 0x04, 8, 8, 8, 8]
+        responder.answerOnce(with: answer)
+        let result = await dnsLookup(name: "dns.google", server: "127.0.0.1", port: responder.port,
+                                     interface: "lo0", timeout: 2)
+        #expect(result == .answered(["8.8.8.8"]))
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func dnsLookupWaitsPastRepliesForOtherQueries() async throws {
+        let responder = try #require(LoopbackDNSResponder())
+        let answer: [UInt8] = [0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2C, 0x00, 0x04, 8, 8, 4, 4]
+        responder.answerOnce(with: answer, decoyFirst: true)
+        let result = await dnsLookup(name: "dns.google", server: "127.0.0.1", port: responder.port,
+                                     interface: "lo0", timeout: 2)
+        #expect(result == .answered(["8.8.4.4"]))
+    }
+
+    @Test func dnsLookupRejectsUnparseableServer() async {
+        #expect(await dnsLookup(name: "dns.google", server: "not-an-ip", interface: "lo0", timeout: 1) == .failed)
+        #expect(await dnsLookup(name: "dns.google", server: "127.0.0.1", interface: "nosuchif0", timeout: 1) == .failed)
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func systemConfigForUnknownInterfaceIsEmptyAndChangesFinishOnDeinit() async {
         var source: SystemNetworkConfig? = SystemNetworkConfig(interfaceName: "nosuchif0")
@@ -117,5 +152,72 @@ import WiFiCore
         #expect(dnsServerAddress("10.0.0.1")?.family == AF_INET)
         #expect(dnsServerAddress("apple.com") == nil)
         #expect(dnsServerAddress("") == nil)
+    }
+}
+
+/// A UDP responder on 127.0.0.1 at a free port. It answers one query by echoing its header and question with the
+/// reply flags set and one answer record appended, then closes. With `decoyFirst` it first sends the same reply
+/// with the id changed, which the lookup must ignore.
+private final class LoopbackDNSResponder: @unchecked Sendable {
+    let port: UInt16
+    private let fd: Int32
+
+    init?() {
+        let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        guard fd >= 0 else { return nil }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, length) }
+        }
+        let named = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+        }
+        guard bound == 0, named == 0 else { close(fd); return nil }
+        self.fd = fd
+        self.port = UInt16(bigEndian: address.sin_port)
+    }
+
+    func answerOnce(with answer: [UInt8], decoyFirst: Bool = false) {
+        DispatchQueue.global().async { [fd] in
+            defer { close(fd) }
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            guard poll(&descriptor, 1, 5_000) > 0 else { return }
+            var buffer = [UInt8](repeating: 0, count: 512)
+            var sender = sockaddr_storage()
+            var senderLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
+            let received = buffer.withUnsafeMutableBytes { bytes in
+                withUnsafeMutablePointer(to: &sender) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        recvfrom(fd, bytes.baseAddress, bytes.count, 0, $0, &senderLength)
+                    }
+                }
+            }
+            guard received >= 12 else { return }
+            var reply = Array(buffer.prefix(received))
+            reply[2] = 0x81  // QR, recursion desired
+            reply[3] = 0x80  // recursion available, no error
+            reply[7] = 1     // one answer
+            reply += answer
+            func send(_ datagram: [UInt8]) {
+                _ = datagram.withUnsafeBytes { bytes in
+                    withUnsafePointer(to: &sender) {
+                        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                            sendto(fd, bytes.baseAddress, bytes.count, 0, $0, senderLength)
+                        }
+                    }
+                }
+            }
+            if decoyFirst {
+                var decoy = reply
+                decoy[1] ^= 0xFF
+                send(decoy)
+            }
+            send(reply)
+        }
     }
 }

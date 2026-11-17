@@ -20,6 +20,10 @@ public final class SystemProber: Prober {
         await dnsProbe(server: server, interface: interfaceName, timeout: 2)
     }
 
+    public func dnsLookup(name: String, server: String) async -> DNSLookup {
+        await WiFiSystem.dnsLookup(name: name, server: server, interface: interfaceName, timeout: 2)
+    }
+
     public func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) {
         await http.captiveCheck()
     }

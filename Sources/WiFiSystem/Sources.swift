@@ -26,12 +26,16 @@ public struct NetworkConfig: Sendable, Hashable {
     public var dnsServers: [String]
     public var ipv4: [String]
     public var ipv6: [String]
+    /// The DNS servers were entered by hand in the service's settings rather than handed out by the network.
+    public var dnsServersSetByHand: Bool
 
-    public init(gatewayIP: String?, dnsServers: [String], ipv4: [String], ipv6: [String]) {
+    public init(gatewayIP: String?, dnsServers: [String], ipv4: [String], ipv6: [String],
+                dnsServersSetByHand: Bool = false) {
         self.gatewayIP = gatewayIP
         self.dnsServers = dnsServers
         self.ipv4 = ipv4
         self.ipv6 = ipv6
+        self.dnsServersSetByHand = dnsServersSetByHand
     }
 }
 
@@ -65,6 +69,8 @@ public enum PingResult: Sendable, Equatable {
 public protocol Prober: AnyObject {
     func ping(_ ip: String) async -> PingResult
     func dnsLatency(server: String) async -> PingResult
+    /// Looks up the A records of `name` on the DNS server `server`.
+    func dnsLookup(name: String, server: String) async -> DNSLookup
     func internetCheck() async -> (status: InternetStatus, latencyMs: Double?)
     func publicIP() async -> String?
 }

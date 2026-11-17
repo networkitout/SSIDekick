@@ -193,6 +193,16 @@ private final class DemoProber: Prober {
 
     func ping(_ ip: String) async -> PingResult { online ? .reply(3.4) : .timeout }
     func dnsLatency(server: String) async -> PingResult { online ? .reply(18.2) : .timeout }
+    /// Answers keyed by name; names under example.com use the key "madeUp".
+    var lookups: [String: DNSLookup] = [
+        "one.one.one.one": .answered(["1.1.1.1", "1.0.0.1"]),
+        "dns.google": .answered(["8.8.8.8", "8.8.4.4"]),
+        "madeUp": .nameError,
+    ]
+    func dnsLookup(name: String, server: String) async -> DNSLookup {
+        guard online else { return .failed }
+        return lookups[name.hasSuffix(".example.com") ? "madeUp" : name] ?? .failed
+    }
     func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) { online ? (.online, 41.7) : (.offline, nil) }
     /// An address from the documentation range (RFC 5737).
     func publicIP() async -> String? { online ? "203.0.113.24" : nil }

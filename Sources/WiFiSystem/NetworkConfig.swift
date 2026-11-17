@@ -2,11 +2,15 @@ import Foundation
 import SystemConfiguration
 
 /// Maps one network service's state dictionaries to a `NetworkConfig`. Missing keys give empty values.
-func networkConfig(fromService ipv4: [String: Any]?, ipv6: [String: Any]?, dns: [String: Any]?) -> NetworkConfig {
-    NetworkConfig(gatewayIP: ipv4?["Router"] as? String,
-                  dnsServers: dns?["ServerAddresses"] as? [String] ?? [],
-                  ipv4: ipv4?["Addresses"] as? [String] ?? [],
-                  ipv6: ipv6?["Addresses"] as? [String] ?? [])
+/// `setupDNS` is the service's `Setup:` DNS entry: servers listed there were set by hand.
+func networkConfig(fromService ipv4: [String: Any]?, ipv6: [String: Any]?, dns: [String: Any]?,
+                   setupDNS: [String: Any]? = nil) -> NetworkConfig {
+    let handSet = setupDNS?["ServerAddresses"] as? [String] ?? []
+    return NetworkConfig(gatewayIP: ipv4?["Router"] as? String,
+                         dnsServers: dns?["ServerAddresses"] as? [String] ?? [],
+                         ipv4: ipv4?["Addresses"] as? [String] ?? [],
+                         ipv6: ipv6?["Addresses"] as? [String] ?? [],
+                         dnsServersSetByHand: !handSet.isEmpty)
 }
 
 /// Reads the IP configuration of one interface's network service from the system configuration store.
@@ -59,10 +63,12 @@ public final class SystemNetworkConfig: NetworkConfigSource {
         guard let store, let serviceID = serviceID(in: store) else {
             return networkConfig(fromService: nil, ipv6: nil, dns: nil)
         }
-        func entity(_ name: String) -> [String: Any]? {
-            SCDynamicStoreCopyValue(store, "State:/Network/Service/\(serviceID)/\(name)" as CFString) as? [String: Any]
+        func entity(_ name: String, domain: String = "State") -> [String: Any]? {
+            SCDynamicStoreCopyValue(store, "\(domain):/Network/Service/\(serviceID)/\(name)" as CFString)
+                as? [String: Any]
         }
-        return networkConfig(fromService: entity("IPv4"), ipv6: entity("IPv6"), dns: entity("DNS"))
+        return networkConfig(fromService: entity("IPv4"), ipv6: entity("IPv6"), dns: entity("DNS"),
+                             setupDNS: entity("DNS", domain: "Setup"))
     }
 
     public var changes: AsyncStream<Void> {

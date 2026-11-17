@@ -90,6 +90,17 @@ private final class FakeProber: Prober {
         return pingResults.isEmpty ? .reply(2) : pingResults.removeFirst()
     }
     func dnsLatency(server: String) async -> PingResult { dnsResult }
+    var lookupCount = 0
+    /// Answers keyed by name; names under example.com use the key "madeUp".
+    var lookups: [String: DNSLookup] = [
+        "one.one.one.one": .answered(["1.1.1.1", "1.0.0.1"]),
+        "dns.google": .answered(["8.8.8.8", "8.8.4.4"]),
+        "madeUp": .nameError,
+    ]
+    func dnsLookup(name: String, server: String) async -> DNSLookup {
+        lookupCount += 1
+        return lookups[name.hasSuffix(".example.com") ? "madeUp" : name] ?? .failed
+    }
     func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) { internetCount += 1; return (.online, 30) }
     func publicIP() async -> String? { publicIPCount += 1; return "203.0.113.5" }
 }
