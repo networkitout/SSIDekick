@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 import WiFiCore
@@ -25,14 +26,21 @@ struct WiFiUtilApp: App {
             let location = LocationAuthorizer()
             let wifi = CoreWLANSource()
             vendors = Self.bundledVendors()
-            engine = Engine(wifi: wifi, config: SystemNetworkConfig(interfaceName: wifi.interfaceName ?? "en0"),
-                            neighbors: ARPNeighborTable(), prober: SystemProber(), location: location,
+            let interfaceName = wifi.interfaceName ?? "en0"
+            engine = Engine(wifi: wifi, config: SystemNetworkConfig(interfaceName: interfaceName),
+                            neighbors: ARPNeighborTable(interfaceName: interfaceName),
+                            prober: SystemProber(interfaceName: interfaceName), location: location,
                             vendors: vendors, settings: settings)
         }
         self.engine = engine
         self.vendors = vendors
         let notifier = notifier
         engine.onNewFindings = { findings in notifier.post(findings) }
+        // Sleep can carry the Mac to another network under the same name; a wake always starts a new session.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil,
+                                                          queue: .main) { _ in
+            MainActor.assumeIsolated { engine.noteWake() }
+        }
         engine.start()
     }
 

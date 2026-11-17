@@ -8,8 +8,12 @@ public struct ConnectivitySnapshot: Sendable, Hashable {
     public var gatewayMAC: MACAddress?
     public var gatewayLatencyMs: Double?
     public var gatewayLossPercent: Int?
+    /// The last gateway ping could not be sent (for example Local Network privacy refused it).
+    public var gatewayBlocked: Bool
     public var dnsServers: [String]
     public var dnsLatencyMs: Double?
+    /// The last DNS query could not be sent.
+    public var dnsBlocked: Bool
     public var internet: InternetStatus
     public var internetLatencyMs: Double?
     public var ipv4: [String]
@@ -21,8 +25,10 @@ public struct ConnectivitySnapshot: Sendable, Hashable {
         gatewayMAC = nil
         gatewayLatencyMs = nil
         gatewayLossPercent = nil
+        gatewayBlocked = false
         dnsServers = []
         dnsLatencyMs = nil
+        dnsBlocked = false
         internet = .unknown
         internetLatencyMs = nil
         ipv4 = []
@@ -43,10 +49,12 @@ public struct Snapshot: Sendable {
     public var findings: [Finding]
     /// `networkVerdict` for `link.ssid`; `.clear` when not connected.
     public var connectedVerdict: Verdict
+    /// Why Wi-Fi event monitoring could not start (joins and roams then trigger no scan); nil when it works.
+    public var eventMonitoringError: String?
 
     public init(state: WiFiState, locationAuthorized: Bool, link: LinkSnapshot?, connectivity: ConnectivitySnapshot,
                 scan: [AccessPoint], scanTime: Date?, scanError: String?, findings: [Finding],
-                connectedVerdict: Verdict) {
+                connectedVerdict: Verdict, eventMonitoringError: String? = nil) {
         self.state = state
         self.locationAuthorized = locationAuthorized
         self.link = link
@@ -56,6 +64,7 @@ public struct Snapshot: Sendable {
         self.scanError = scanError
         self.findings = findings
         self.connectedVerdict = connectedVerdict
+        self.eventMonitoringError = eventMonitoringError
     }
 
     public static let empty = Snapshot(state: .notConnected, locationAuthorized: false, link: nil,

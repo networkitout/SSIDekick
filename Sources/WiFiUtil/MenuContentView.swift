@@ -92,9 +92,12 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private func connectivityBlock(_ net: ConnectivitySnapshot) -> some View {
+        // "blocked": the probe could not be sent (for example Local Network access was refused), which is not loss.
         row("Gateway \(net.gatewayIP ?? "–")",
-            "\(millis(net.gatewayLatencyMs))   \(net.gatewayLossPercent.map { "\($0)% loss" } ?? "– loss")")
-        row("DNS \(net.dnsServers.first ?? "–")", millis(net.dnsLatencyMs))
+            net.gatewayBlocked
+                ? "blocked"
+                : "\(millis(net.gatewayLatencyMs))   \(net.gatewayLossPercent.map { "\($0)% loss" } ?? "– loss")")
+        row("DNS \(net.dnsServers.first ?? "–")", net.dnsBlocked ? "blocked" : millis(net.dnsLatencyMs))
         row("Internet", internetText(net))
         Text(addressLine(net))
     }

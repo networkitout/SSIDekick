@@ -18,6 +18,8 @@
 	<string>WiFiUtil needs Location Services because macOS only reveals Wi-Fi network names and access point addresses to apps that have it.</string>
 	<key>NSLocationUsageDescription</key>
 	<string>WiFiUtil needs Location Services because macOS only reveals Wi-Fi network names and access point addresses to apps that have it.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>WiFiUtil pings your Wi-Fi gateway and queries its DNS server to show whether the network is working.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>

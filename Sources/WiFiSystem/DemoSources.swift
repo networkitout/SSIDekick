@@ -6,9 +6,11 @@ public enum DemoScenario: String, CaseIterable {
     case office, planeTwin, clonedAddress, newcomer, gatewayChange, locationDenied, wifiOff
 }
 
-public func demoSources(_ scenario: DemoScenario) -> (wifi: WiFiSource, config: NetworkConfigSource, neighbors: NeighborSource,
-                                                      prober: Prober, location: LocationAuthorizing, vendors: VendorLookup) {
-    let created = Date()
+/// `now` is the clock the time-based scenarios (the gateway switch) follow; tests pass a controllable one.
+public func demoSources(_ scenario: DemoScenario, now: @escaping () -> Date = Date.init)
+    -> (wifi: WiFiSource, config: NetworkConfigSource, neighbors: NeighborSource,
+        prober: Prober, location: LocationAuthorizing, vendors: VendorLookup) {
+    let created = now()
     let wifi: DemoWiFi
     switch scenario {
     case .office:
@@ -47,12 +49,12 @@ public func demoSources(_ scenario: DemoScenario) -> (wifi: WiFiSource, config: 
     let neighbors: DemoNeighbors
     switch scenario {
     case .gatewayChange:
-        neighbors = DemoNeighbors(answer: Demo.mac("00:14:6c:5e:a0:01"), created: created,
+        neighbors = DemoNeighbors(answer: Demo.mac("00:14:6c:5e:a0:01"), created: created, now: now,
                                   laterAnswer: (after: 15, address: Demo.mac("50:c7:bf:91:3d:07")))
     case .wifiOff:
-        neighbors = DemoNeighbors(answer: nil, created: created)
+        neighbors = DemoNeighbors(answer: nil, created: created, now: now)
     default:
-        neighbors = DemoNeighbors(answer: Demo.mac("00:14:6c:5e:a0:01"), created: created)
+        neighbors = DemoNeighbors(answer: Demo.mac("00:14:6c:5e:a0:01"), created: created, now: now)
     }
 
     let prober = scenario == .wifiOff ? DemoProber(online: false) : DemoProber(online: true)
@@ -154,14 +156,8 @@ private final class DemoWiFi: WiFiSource {
         return entries
     }
 
-    /// Announces the join once, so a started Engine scans right away, as it would after joining a network.
-    var events: AsyncStream<WiFiEvent> {
-        let joined = !isOff
-        return AsyncStream { continuation in
-            if joined { continuation.yield(.ssidChanged) }
-            continuation.finish()
-        }
-    }
+    /// No events: a started Engine asks for its first scan itself when connected.
+    var events: AsyncStream<WiFiEvent> { AsyncStream { $0.finish() } }
 }
 
 private final class DemoConfig: NetworkConfigSource {
@@ -174,16 +170,19 @@ private final class DemoConfig: NetworkConfigSource {
 private final class DemoNeighbors: NeighborSource {
     private let answer: MACAddress?
     private let created: Date
+    private let now: () -> Date
     private let laterAnswer: (after: TimeInterval, address: MACAddress)?
 
-    init(answer: MACAddress?, created: Date, laterAnswer: (after: TimeInterval, address: MACAddress)? = nil) {
+    init(answer: MACAddress?, created: Date, now: @escaping () -> Date,
+         laterAnswer: (after: TimeInterval, address: MACAddress)? = nil) {
         self.answer = answer
         self.created = created
+        self.now = now
         self.laterAnswer = laterAnswer
     }
 
     func hardwareAddress(forIPv4 ip: String) async -> MACAddress? {
-        if let laterAnswer, Date().timeIntervalSince(created) >= laterAnswer.after { return laterAnswer.address }
+        if let laterAnswer, now().timeIntervalSince(created) >= laterAnswer.after { return laterAnswer.address }
         return answer
     }
 }
@@ -192,8 +191,8 @@ private final class DemoProber: Prober {
     private let online: Bool
     init(online: Bool) { self.online = online }
 
-    func ping(_ ip: String) async -> Double? { online ? 3.4 : nil }
-    func dnsLatency(server: String) async -> Double? { online ? 18.2 : nil }
+    func ping(_ ip: String) async -> PingResult { online ? .reply(3.4) : .timeout }
+    func dnsLatency(server: String) async -> PingResult { online ? .reply(18.2) : .timeout }
     func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) { online ? (.online, 41.7) : (.offline, nil) }
     /// An address from the documentation range (RFC 5737).
     func publicIP() async -> String? { online ? "203.0.113.24" : nil }

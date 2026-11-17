@@ -46,8 +46,16 @@ public final class Engine {
     @ObservationIgnored private let location: LocationAuthorizing
     @ObservationIgnored private let detector: TwinDetector
     @ObservationIgnored private let now: () -> Date
+    /// Waits the given seconds; false when the waiting task was cancelled. Injected so tests need no wall clock.
+    @ObservationIgnored private let sleep: (TimeInterval) async -> Bool
 
     @ObservationIgnored private var monitor = ConnectionMonitor()
+    /// Sibling findings of the last completed full scan; recomputed only when a scan completes.
+    @ObservationIgnored private var siblingFindings: [Finding] = []
+    @ObservationIgnored private var scheduler = ScanScheduler()
+    /// Location authorisation as last seen by the Location event loop. Kept apart from the snapshot, which the link
+    /// loop may refresh first, so a grant is never missed.
+    @ObservationIgnored private var locationWasAuthorized = false
     @ObservationIgnored private var ledger = NotificationLedger()
     @ObservationIgnored private var lossWindow = LossWindow()
     /// The network name of the current session as the Engine sees it; nil when there is none.
@@ -68,7 +76,10 @@ public final class Engine {
 
     public init(wifi: WiFiSource, config: NetworkConfigSource, neighbors: NeighborSource, prober: Prober,
                 location: LocationAuthorizing, vendors: VendorLookup, settings: EngineSettings,
-                now: @escaping () -> Date = Date.init) {
+                now: @escaping () -> Date = Date.init,
+                sleep: @escaping (TimeInterval) async -> Bool = { seconds in
+                    (try? await Task.sleep(for: .seconds(seconds))) != nil
+                }) {
         self.wifi = wifi
         self.config = config
         self.neighbors = neighbors
@@ -77,29 +88,86 @@ public final class Engine {
         self.detector = TwinDetector(vendors: vendors)
         self.settings = settings
         self.now = now
+        self.sleep = sleep
     }
 
     // MARK: Lifecycle
 
-    /// Requests Location if undetermined, seeds the scan from the system cache, then starts timers and event loops.
+    /// Requests Location if undetermined, seeds the scan from the system cache (for display only: it raises no
+    /// findings), then starts timers and event loops, and asks for a first scan when connected with Location allowed.
     public func start() {
         stop()
         if !location.isDetermined { location.request() }
         snapshot.scan = wifi.cachedScan()
         refreshLink()
         tasks.isRunning = true
+        locationWasAuthorized = location.isAuthorized
         startLinkAndProbeLoops()
         startScanLoop()
         startEventLoops()
+        if snapshot.state == .connected, location.isAuthorized { requestScan() }
     }
 
-    /// Cancels every timer and event loop.
+    /// Cancels every timer and event loop, and any pending automatic scan.
     public func stop() {
         tasks.cancelAll()
+        scheduler.cancelPending()
     }
 
     /// How many times each loop has been started.
     var loopStarts: [String: Int] { tasks.starts }
+    /// Test hook: the task currently registered under `key`.
+    func loopTask(_ key: String) -> Task<Void, Never>? { tasks.task(key) }
+    /// Test hook: the task that runs the next automatic scan, if one was armed.
+    var armedScanTask: Task<Void, Never>? { tasks.task("scanRequest") }
+    /// Test hook: a probe round is running.
+    var isProbing: Bool { probing }
+
+    /// Ends the current session after the Mac wakes, so a network joined meanwhile starts with fresh baselines.
+    public func noteWake() {
+        endSession()
+        _ = linkTick()
+    }
+
+    /// Asks for an automatic scan through the scheduler: debounced, spaced from the previous scan, skipped when
+    /// Wi-Fi is not connected at the time it falls due, and rerun once if a scan is in flight.
+    func requestScan() {
+        if scheduler.request(now: now()) { armScan() }
+    }
+
+    /// Starts (or restarts) the timer for the pending automatic scan.
+    private func armScan() {
+        guard let due = scheduler.dueDate else { return }
+        let sleep = self.sleep
+        let wait = due.timeIntervalSince(now())
+        tasks.replace("scanRequest", with: Task { [weak self] in
+            if wait > 0 { guard await sleep(wait) else { return } }
+            await self?.runRequestedScan()
+        })
+    }
+
+    private func runRequestedScan() async {
+        guard let due = scheduler.dueDate, !scheduler.isScanning else { return }
+        if due > now() {
+            armScan()
+            return
+        }
+        guard wifi.state() == .connected else {
+            scheduler.cancelPending()
+            return
+        }
+        await performScan()
+    }
+
+    /// Ends the current session: the next link read starts a new one, even under the same network name.
+    private func endSession() {
+        monitor.reset()
+        sessionName = nil
+        connectionEpoch += 1
+        snapshot.connectivity = ConnectivitySnapshot()
+        lossWindow = LossWindow()
+        probesStale = true
+    }
 
     /// The link and probe loops re-read their cadence after every tick, so they are started only once.
     private func startLinkAndProbeLoops() {
@@ -129,7 +197,7 @@ public final class Engine {
             while true {
                 do { try await Task.sleep(for: .seconds(interval)) } catch { return }
                 guard let self else { return }
-                await self.scanNow()
+                self.requestScan()
             }
         })
     }
@@ -139,11 +207,7 @@ public final class Engine {
         tasks.replace("wifiEvents", with: Task { [weak self] in
             for await event in events {
                 guard let self else { return }
-                _ = self.linkTick()
-                switch event {
-                case .ssidChanged, .bssidChanged: await self.scanNow()
-                case .powerChanged, .linkChanged: break
-                }
+                self.handle(event)
             }
         })
         let configChanges = config.changes
@@ -158,8 +222,24 @@ public final class Engine {
             for await _ in locationChanges {
                 guard let self else { return }
                 _ = self.linkTick()
+                let authorized = self.location.isAuthorized
+                if authorized, !self.locationWasAuthorized { self.requestScan() }
+                self.locationWasAuthorized = authorized
             }
         })
+    }
+
+    /// A name change is a session boundary even when the name stays the same (re-association), so it ends the
+    /// session before the link is read. Joining or roaming asks for a scan; leaving does not.
+    private func handle(_ event: WiFiEvent) {
+        if event == .ssidChanged { endSession() }
+        _ = linkTick()
+        switch event {
+        case .ssidChanged, .bssidChanged:
+            if snapshot.state == .connected, snapshot.link != nil { requestScan() }
+        case .powerChanged, .linkChanged:
+            break
+        }
     }
 
     /// Refreshes the link and, after a session change, starts a probe for the new network without waiting for it.
@@ -181,12 +261,22 @@ public final class Engine {
         snapshot.state = wifi.state()
         snapshot.link = wifi.currentLink()
         snapshot.locationAuthorized = location.isAuthorized
+        snapshot.eventMonitoringError = wifi.monitoringError
         recompute(completedScan: nil)
     }
 
     /// Reads the IP configuration and probes the gateway, DNS and internet. A call that arrives while a probe is
     /// in flight is not lost: any number of them coalesce into one more probe after the current one finishes.
+    /// Nothing is probed unless Wi-Fi is connected; otherwise the connectivity values are cleared.
     public func refreshProbes() async {
+        guard wifi.state() == .connected else {
+            if snapshot.connectivity != ConnectivitySnapshot() {
+                connectionEpoch += 1   // drops any probe still in flight
+                snapshot.connectivity = ConnectivitySnapshot()
+                lossWindow = LossWindow()
+            }
+            return
+        }
         guard !probing else {
             probeRequested = true
             return
@@ -210,14 +300,15 @@ public final class Engine {
         let epoch = connectionEpoch
         let current = config.current()
         var gatewayMAC: MACAddress?
-        var gatewayLatency: Double?
+        var gatewayPing: PingResult?
         if let gateway = current.gatewayIP {
+            // The ping first: it makes the system resolve the router's hardware address before ARP is read.
+            gatewayPing = await prober.ping(gateway)
             gatewayMAC = await neighbors.hardwareAddress(forIPv4: gateway)
-            gatewayLatency = await prober.ping(gateway)
         }
-        var dnsLatency: Double?
+        var dnsResult: PingResult?
         if let server = current.dnsServers.first {
-            dnsLatency = await prober.dnsLatency(server: server)
+            dnsResult = await prober.dnsLatency(server: server)
         }
         let internet = await prober.internetCheck()
 
@@ -226,18 +317,23 @@ public final class Engine {
         guard epoch == connectionEpoch else { return .sessionChanged }
         guard config.current() == current else { return .configChanged }
         probesStale = false
-        var gatewayLoss: Int?
-        if current.gatewayIP != nil {
-            lossWindow.record(success: gatewayLatency != nil)
-            gatewayLoss = lossWindow.lossPercent
+        // A ping that could not be sent says nothing about loss.
+        if let gatewayPing, gatewayPing != .blocked {
+            lossWindow.record(success: gatewayPing.latencyMs != nil)
         }
+        let gatewayLoss = current.gatewayIP == nil ? nil : lossWindow.lossPercent
+        // A missing ARP answer keeps the last good address for the same router in this session.
+        let previous = snapshot.connectivity
+        if gatewayMAC == nil, previous.gatewayIP == current.gatewayIP { gatewayMAC = previous.gatewayMAC }
 
         snapshot.connectivity.gatewayIP = current.gatewayIP
         snapshot.connectivity.gatewayMAC = gatewayMAC
-        snapshot.connectivity.gatewayLatencyMs = gatewayLatency
+        snapshot.connectivity.gatewayLatencyMs = gatewayPing?.latencyMs
         snapshot.connectivity.gatewayLossPercent = gatewayLoss
+        snapshot.connectivity.gatewayBlocked = gatewayPing == .blocked
         snapshot.connectivity.dnsServers = current.dnsServers
-        snapshot.connectivity.dnsLatencyMs = dnsLatency
+        snapshot.connectivity.dnsLatencyMs = dnsResult?.latencyMs
+        snapshot.connectivity.dnsBlocked = dnsResult == .blocked
         snapshot.connectivity.internet = internet.status
         snapshot.connectivity.internetLatencyMs = internet.latencyMs
         snapshot.connectivity.ipv4 = current.ipv4
@@ -248,7 +344,7 @@ public final class Engine {
 
     /// Fetches the public IP unless disabled or already known for this session.
     public func refreshPublicIP() async {
-        guard settings.publicIPEnabled, snapshot.connectivity.publicIP == nil, !fetchingPublicIP else { return }
+        guard wifi.state() == .connected, settings.publicIPEnabled, snapshot.connectivity.publicIP == nil, !fetchingPublicIP else { return }
         fetchingPublicIP = true
         defer { fetchingPublicIP = false }
         let epoch = connectionEpoch
@@ -259,11 +355,20 @@ public final class Engine {
         recompute(completedScan: nil)
     }
 
-    /// Runs a full scan, then re-evaluates findings. A failed scan keeps the previous results.
+    /// The user's "Scan now": runs a full scan at once, even when not connected, then re-evaluates findings.
+    /// It never overlaps a scan in flight; it asks for one more scan after it instead. A failed scan keeps the
+    /// previous results.
     public func scanNow() async {
-        guard !isScanning else { return }
+        guard !scheduler.isScanning else {
+            _ = scheduler.request(now: now())
+            return
+        }
+        await performScan()
+    }
+
+    private func performScan() async {
+        scheduler.begin()
         isScanning = true
-        defer { isScanning = false }
         do {
             let result = try await wifi.scan()
             snapshot.scan = result
@@ -274,6 +379,8 @@ public final class Engine {
             snapshot.scanError = error.localizedDescription
             recompute(completedScan: nil)
         }
+        isScanning = false
+        if scheduler.finish(now: now()) { armScan() }
     }
 
     // MARK: Findings
@@ -298,7 +405,7 @@ public final class Engine {
                                          gatewayMAC: snapshot.connectivity.gatewayMAC,
                                          dnsServers: snapshot.connectivity.dnsServers)
         }
-        let siblingFindings = detector.findings(in: snapshot.scan)
+        if let completedScan { siblingFindings = detector.findings(in: completedScan) }
         let connectedFindings = monitor.update(
             connection: connection, scan: completedScan,
             siblingFindings: siblingFindings.filter { $0.ssid == connection?.ssid },
@@ -345,6 +452,8 @@ private final class TaskBag {
     private var tasks: [String: Task<Void, Never>] = [:]
     /// How many times each loop has been started; lets tests check which changes restart which loops.
     private(set) var starts: [String: Int] = [:]
+
+    func task(_ key: String) -> Task<Void, Never>? { tasks[key] }
 
     func replace(_ key: String, with task: Task<Void, Never>?) {
         tasks[key]?.cancel()

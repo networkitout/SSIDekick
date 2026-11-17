@@ -59,6 +59,9 @@ public func formatReport(_ snapshot: Snapshot, vendors: VendorLookup, now: Date)
     case .notConnected: lines.append("Not connected")
     case .connected: lines.append("Connected")
     }
+    if let error = snapshot.eventMonitoringError {
+        lines.append("Wi-Fi event monitoring could not start: \(error)")
+    }
     if let link = snapshot.link {
         lines.append("Network: \(visible ? (link.ssid ?? "n/a") : hiddenByLocation)")
         lines.append("Access point: \(visible ? (link.bssid?.description ?? "n/a") : hiddenByLocation)")
@@ -74,8 +77,12 @@ public func formatReport(_ snapshot: Snapshot, vendors: VendorLookup, now: Date)
     lines.append("")
     lines.append("Connectivity")
     lines.append("Gateway: \(net.gatewayIP ?? "n/a"), address \(visible ? (net.gatewayMAC?.description ?? "n/a") : hiddenByLocation)")
-    lines.append("Gateway latency: \(millis(net.gatewayLatencyMs)), loss \(net.gatewayLossPercent.map { "\($0)%" } ?? "n/a")")
-    lines.append("DNS: \(list(net.dnsServers)), latency \(millis(net.dnsLatencyMs))")
+    if net.gatewayBlocked {
+        lines.append("Gateway latency: blocked")
+    } else {
+        lines.append("Gateway latency: \(millis(net.gatewayLatencyMs)), loss \(net.gatewayLossPercent.map { "\($0)%" } ?? "n/a")")
+    }
+    lines.append("DNS: \(list(net.dnsServers)), latency \(net.dnsBlocked ? "blocked" : millis(net.dnsLatencyMs))")
     lines.append("Internet: \(internetText(net.internet)), latency \(millis(net.internetLatencyMs))")
     lines.append("IPv4: \(list(net.ipv4))")
     lines.append("IPv6: \(list(net.ipv6))")

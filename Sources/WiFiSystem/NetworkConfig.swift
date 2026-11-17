@@ -66,7 +66,8 @@ public final class SystemNetworkConfig: NetworkConfigSource {
     }
 
     public var changes: AsyncStream<Void> {
-        AsyncStream { continuation in observer.add(continuation) }
+        // Only "something changed" matters, so a burst of store notifications collapses into one pending element.
+        AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in observer.add(continuation) }
     }
 
     /// The first service (in sorted key order, so repeated reads agree) whose IPv4 state names this interface.

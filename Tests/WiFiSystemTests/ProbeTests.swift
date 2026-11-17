@@ -5,13 +5,30 @@ import WiFiCore
 
 @Suite struct ProbeTests {
     @Test func parseARPReadsUnpaddedAddress() {
-        #expect(parseARP("? (10.0.0.1) at a4:b1:c2:0:1:f on en0 ifscope [ethernet]\n")?.description == "a4:b1:c2:00:01:0f")
+        #expect(parseARP("? (10.0.0.1) at a4:b1:c2:0:1:f on en0 ifscope [ethernet]\n", interface: "en0")?.description
+                == "a4:b1:c2:00:01:0f")
     }
 
     @Test func parseARPRejectsIncompleteAndMissingEntries() {
-        #expect(parseARP("? (10.0.0.1) at (incomplete) on en0 ifscope [ethernet]\n") == nil)
-        #expect(parseARP("10.0.0.1 (10.0.0.1) -- no entry\n") == nil)
-        #expect(parseARP("") == nil)
+        #expect(parseARP("? (10.0.0.1) at (incomplete) on en0 ifscope [ethernet]\n", interface: "en0") == nil)
+        #expect(parseARP("10.0.0.1 (10.0.0.1) -- no entry\n", interface: "en0") == nil)
+        #expect(parseARP("", interface: "en0") == nil)
+    }
+
+    @Test func parseARPIgnoresOtherInterfaces() {
+        let output = """
+        ? (10.0.0.1) at a4:b1:c2:0:1:f on en7 ifscope [ethernet]
+        ? (10.0.0.1) at 50:c7:bf:1:2:3 on en0 ifscope [ethernet]
+
+        """
+        #expect(parseARP(output, interface: "en0") == MACAddress("50:c7:bf:01:02:03"))
+        #expect(parseARP(output, interface: "en10") == nil)
+        #expect(parseARP("? (10.0.0.1) at a4:b1:c2:0:1:f on en7 ifscope [ethernet]\n", interface: "en0") == nil)
+    }
+
+    @Test func interfaceNameValidation() {
+        for good in ["en0", "en10", "lo0", "bridge100"] { #expect(isValidInterfaceName(good)) }
+        for bad in ["", "en", "0en", "EN0", "en0 ", "en0;ls", "-a", "en0\n", "utun0-x"] { #expect(!isValidInterfaceName(bad)) }
     }
 
     @Test func icmpChecksumMatchesKnownValue() {
@@ -56,7 +73,8 @@ import WiFiCore
         #expect(config.gatewayIP == nil)
     }
 
-    @Test func systemConfigForUnknownInterfaceIsEmptyAndChangesFinishOnDeinit() async {
+    @Test(.timeLimit(.minutes(1)))
+    func systemConfigForUnknownInterfaceIsEmptyAndChangesFinishOnDeinit() async {
         var source: SystemNetworkConfig? = SystemNetworkConfig(interfaceName: "nosuchif0")
         #expect(source?.current() == NetworkConfig(gatewayIP: nil, dnsServers: [], ipv4: [], ipv6: []))
         let changes = source!.changes
@@ -65,25 +83,31 @@ import WiFiCore
     }
 
     @Test func loopbackPingReturnsLatency() async {
-        let latency = await icmpPing("127.0.0.1", timeout: 1)
-        #expect(latency != nil)
-        #expect((latency ?? .infinity) < 100)
+        let result = await icmpPing("127.0.0.1", interface: "lo0", timeout: 1)
+        #expect(result.latencyMs != nil)
+        #expect((result.latencyMs ?? .infinity) < 100)
     }
 
     @Test func icmpPingRejectsNonIPv4WithoutSending() async {
-        #expect(await icmpPing("not-an-ip", timeout: 1) == nil)
+        #expect(await icmpPing("not-an-ip", interface: "lo0", timeout: 1) == .blocked)
+    }
+
+    @Test func probesOnUnknownInterfaceAreBlocked() async {
+        #expect(await icmpPing("127.0.0.1", interface: "nosuchif0", timeout: 1) == .blocked)
+        #expect(await dnsProbe(server: "127.0.0.1", interface: "nosuchif0", timeout: 1) == .blocked)
+        #expect(await icmpPing("127.0.0.1", interface: "lo0;x", timeout: 1) == .blocked)
     }
 
     @Test func arpTableRejectsNonIPv4Input() async {
-        let table = ARPNeighborTable()
+        let table = ARPNeighborTable(interfaceName: "lo0")
         #expect(await table.hardwareAddress(forIPv4: "-a") == nil)
         #expect(await table.hardwareAddress(forIPv4: "10.0.0.1; ls") == nil)
         #expect(await table.hardwareAddress(forIPv4: "fe80::1") == nil)
     }
 
     @Test func dnsLatencyRejectsUnparseableServer() async {
-        let prober = SystemProber()
-        #expect(await prober.dnsLatency(server: "not-an-ip") == nil)
+        let prober = SystemProber(interfaceName: "lo0")
+        #expect(await prober.dnsLatency(server: "not-an-ip") == .blocked)
     }
 
     @Test func dnsServerAddressParsesScopedIPv6() {

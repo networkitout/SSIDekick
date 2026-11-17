@@ -107,15 +107,27 @@ public final class CoreWLANSource: NSObject, WiFiSource {
     private let lock = NSLock()
     private var continuation: AsyncStream<WiFiEvent>.Continuation?
 
-    private static let monitoredEvents: [CWEventType] = [.powerDidChange, .ssidDidChange, .bssidDidChange, .linkDidChange]
+    private static let monitoredEvents: [(CWEventType, String)] = [
+        (.powerDidChange, "power"), (.ssidDidChange, "network name"), (.bssidDidChange, "access point"),
+        (.linkDidChange, "link"),
+    ]
+
+    /// Why event monitoring could not be started, if it failed; without it joins and roams trigger no scan.
+    public private(set) var monitoringError: String?
     private static let scanQueue = DispatchQueue(label: "local.wifiutil.wifi-scan", qos: .userInitiated)
 
     public override init() {
         super.init()
         client.delegate = self
-        for type in Self.monitoredEvents {
-            try? client.startMonitoringEvent(with: type)
+        var failures: [String] = []
+        for (type, name) in Self.monitoredEvents {
+            do {
+                try client.startMonitoringEvent(with: type)
+            } catch {
+                failures.append("\(name) events: \(error.localizedDescription)")
+            }
         }
+        monitoringError = failures.isEmpty ? nil : failures.joined(separator: "; ")
     }
 
     deinit {
@@ -158,7 +170,7 @@ public final class CoreWLANSource: NSObject, WiFiSource {
                     return
                 }
                 do {
-                    let networks = try interface.scanForNetworks(withName: nil)
+                    let networks = try interface.scanForNetworks(withName: nil, includeHidden: true)
                     continuation.resume(returning: networks.compactMap(accessPoint(from:)))
                 } catch {
                     continuation.resume(throwing: WiFiScanError(errorDescription: error.localizedDescription))

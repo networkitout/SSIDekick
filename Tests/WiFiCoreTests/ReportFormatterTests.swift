@@ -57,4 +57,24 @@ import Foundation
         let text = formatReport(connected(), vendors: vendors, now: now).lowercased()
         #expect(!text.contains("safe") && !text.contains("secure") && !text.contains("verified"))
     }
+
+    @Test func blockedProbesPrintBlocked() {
+        var snapshot = connected()
+        snapshot.connectivity.gatewayIP = "192.168.1.1"
+        snapshot.connectivity.gatewayBlocked = true
+        snapshot.connectivity.gatewayLossPercent = 0
+        snapshot.connectivity.dnsServers = ["192.168.1.1"]
+        snapshot.connectivity.dnsBlocked = true
+        let text = formatReport(snapshot, vendors: vendors, now: now)
+        #expect(text.contains("Gateway latency: blocked\n"))
+        #expect(text.contains("DNS: 192.168.1.1, latency blocked"))
+    }
+
+    @Test func monitoringErrorIsReported() {
+        var snapshot = connected()
+        snapshot.eventMonitoringError = "refused"
+        let text = formatReport(snapshot, vendors: vendors, now: now)
+        #expect(text.contains("Wi-Fi event monitoring could not start: refused"))
+        #expect(!formatReport(connected(), vendors: vendors, now: now).contains("event monitoring"))
+    }
 }

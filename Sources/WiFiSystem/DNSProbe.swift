@@ -50,42 +50,45 @@ func dnsServerAddress(_ text: String) -> DNSServerAddress? {
     return DNSServerAddress(storage: storage, length: info.pointee.ai_addrlen)
 }
 
-/// Sends one query for apple.com to `server` over UDP and returns the time to a response with the same id.
-func dnsProbe(server: String, timeout: TimeInterval) async -> Double? {
-    guard let address = dnsServerAddress(server) else { return nil }
+/// Sends one query for apple.com to `server` over UDP on `interface` and returns the time to a response with the
+/// same id.
+func dnsProbe(server: String, interface: String, timeout: TimeInterval) async -> PingResult {
+    guard let address = dnsServerAddress(server) else { return .blocked }
     return await withCheckedContinuation { continuation in
         DispatchQueue.global(qos: .utility).async {
-            continuation.resume(returning: blockingDNSProbe(address, timeout: timeout))
+            continuation.resume(returning: blockingDNSProbe(address, interface: interface, timeout: timeout))
         }
     }
 }
 
-private func blockingDNSProbe(_ server: DNSServerAddress, timeout: TimeInterval) -> Double? {
+private func blockingDNSProbe(_ server: DNSServerAddress, interface: String, timeout: TimeInterval) -> PingResult {
+    // Every failure to send is `.blocked`; only a missing answer is `.timeout`.
     let fd = socket(server.family, SOCK_DGRAM, IPPROTO_UDP)
-    guard fd >= 0 else { return nil }
+    guard fd >= 0 else { return .blocked }
     defer { close(fd) }
+    guard bind(fd, family: server.family, toInterface: interface) else { return .blocked }
 
     // Connecting the socket means only datagrams from the server are delivered.
     var storage = server.storage
     let connected = withUnsafePointer(to: &storage) {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, server.length) }
     }
-    guard connected == 0 else { return nil }
+    guard connected == 0 else { return .blocked }
 
     let id = UInt16.random(in: 0...UInt16.max)
     let query = dnsQuery(name: "apple.com", id: id)
     let start = monotonicNanos()
     let deadline = start + UInt64(max(0, timeout) * 1_000_000_000)
     let sent = query.withUnsafeBytes { send(fd, $0.baseAddress, $0.count, 0) }
-    guard sent == query.count else { return nil }
+    guard sent == query.count else { return .blocked }
 
     var buffer = [UInt8](repeating: 0, count: 512)
     while waitReadable(fd, deadline: deadline) {
         let received = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
-        guard received > 0 else { return nil }
+        guard received > 0 else { return .timeout }
         if received >= 2, UInt16(buffer[0]) << 8 | UInt16(buffer[1]) == id {
-            return Double(monotonicNanos() - start) / 1_000_000
+            return .reply(Double(monotonicNanos() - start) / 1_000_000)
         }
     }
-    return nil
+    return .timeout
 }

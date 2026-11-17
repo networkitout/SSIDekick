@@ -20,15 +20,25 @@ func icmpChecksum(_ bytes: [UInt8]) -> UInt16 {
     return ~UInt16(sum)
 }
 
-/// Sends one ICMP echo request to an IPv4 address and returns the round trip in milliseconds,
-/// or nil on timeout or error. The socket work runs off the calling thread.
-func icmpPing(_ ip: String, timeout: TimeInterval) async -> Double? {
-    guard let address = ipv4Address(ip) else { return nil }
+/// Sends one ICMP echo request to an IPv4 address over `interface` and returns the round trip.
+/// The socket work runs off the calling thread.
+func icmpPing(_ ip: String, interface: String, timeout: TimeInterval) async -> PingResult {
+    guard let address = ipv4Address(ip) else { return .blocked }
     return await withCheckedContinuation { continuation in
         DispatchQueue.global(qos: .utility).async {
-            continuation.resume(returning: blockingPing(address, timeout: timeout))
+            continuation.resume(returning: blockingPing(address, interface: interface, timeout: timeout))
         }
     }
+}
+
+/// Binds a socket to one interface (`IP_BOUND_IF` / `IPV6_BOUND_IF`), so its traffic never leaves another way.
+/// False when the name is not a plain interface name, the interface does not exist, or the option fails.
+func bind(_ fd: Int32, family: Int32, toInterface interface: String) -> Bool {
+    guard isValidInterfaceName(interface) else { return false }
+    var index = if_nametoindex(interface)
+    guard index != 0 else { return false }
+    let (level, option) = family == AF_INET6 ? (IPPROTO_IPV6, IPV6_BOUND_IF) : (IPPROTO_IP, IP_BOUND_IF)
+    return setsockopt(fd, level, option, &index, socklen_t(MemoryLayout<UInt32>.size)) == 0
 }
 
 /// Monotonic clock in nanoseconds.
@@ -48,10 +58,12 @@ func waitReadable(_ fd: Int32, deadline: UInt64) -> Bool {
     }
 }
 
-private func blockingPing(_ address: in_addr, timeout: TimeInterval) -> Double? {
+private func blockingPing(_ address: in_addr, interface: String, timeout: TimeInterval) -> PingResult {
+    // Every failure to send is `.blocked`, never loss: it says nothing about the network.
     let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP)
-    guard fd >= 0 else { return nil }
+    guard fd >= 0 else { return .blocked }
     defer { close(fd) }
+    guard bind(fd, family: AF_INET, toInterface: interface) else { return .blocked }
 
     let identifier = UInt16.random(in: 0...UInt16.max)
     let sequence = UInt16.random(in: 0...UInt16.max)
@@ -77,17 +89,17 @@ private func blockingPing(_ address: in_addr, timeout: TimeInterval) -> Double? 
             }
         }
     }
-    guard sent == packet.count else { return nil }
+    guard sent == packet.count else { return .blocked }
 
     var buffer = [UInt8](repeating: 0, count: 256)
     while waitReadable(fd, deadline: deadline) {
         let received = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
-        guard received > 0 else { return nil }
+        guard received > 0 else { return .timeout }
         if isEchoReply(Array(buffer[0..<received]), sequence: sequence) {
-            return Double(monotonicNanos() - start) / 1_000_000
+            return .reply(Double(monotonicNanos() - start) / 1_000_000)
         }
     }
-    return nil
+    return .timeout
 }
 
 /// True for an echo reply (type 0) carrying `sequence`. Skips a leading IPv4 header when present.

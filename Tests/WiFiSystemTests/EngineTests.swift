@@ -7,9 +7,9 @@ import WiFiCore
 
 private func mac(_ s: String) -> MACAddress { MACAddress(s)! }
 
-private func ap(_ ssid: String, _ bssid: String, rssi: Int = -60) -> AccessPoint {
-    AccessPoint(ssid: ssid, bssid: mac(bssid), rssi: rssi, noise: -90,
-                channel: Channel(number: 44, band: .ghz5, widthMHz: 80),
+private func ap(_ ssid: String?, _ bssid: String?, rssi: Int = -60, ch: Int = 44) -> AccessPoint {
+    AccessPoint(ssid: ssid, bssid: bssid.map(mac), rssi: rssi, noise: -90,
+                channel: Channel(number: ch, band: .ghz5, widthMHz: 80),
                 security: [.wpa2], generation: .wifi6, countryCode: "US", beaconInterval: 100)
 }
 
@@ -21,16 +21,37 @@ private func makeLink(_ ssid: String?, _ bssid: String?) -> LinkSnapshot {
 
 private struct FakeScanError: Error {}
 
+/// Shared record of the order in which fakes were called.
+private final class CallLog {
+    var entries: [String] = []
+}
+
 private final class FakeWiFi: WiFiSource {
     var wifiState: WiFiState = .connected
     var link: LinkSnapshot? = makeLink("Corp", "00:0b:86:00:00:01")
     var scans: [Result<[AccessPoint], Error>] = []
+    /// Returned once `scans` runs out.
+    var defaultScan: [AccessPoint] = []
+    var cached: [AccessPoint] = []
+    var monitoringError: String?
+    var clock: Clock?
+    /// Clock time at the start of every scan.
+    var scanTimes: [Date] = []
+    var scanCount: Int { scanTimes.count }
+    /// Runs while a scan is in flight.
+    var duringScan: (() async -> Void)?
+    let (eventStream, eventContinuation) = AsyncStream<WiFiEvent>.makeStream()
 
     func state() -> WiFiState { wifiState }
     func currentLink() -> LinkSnapshot? { link }
-    func cachedScan() -> [AccessPoint] { [] }
-    func scan() async throws -> [AccessPoint] { try scans.removeFirst().get() }
-    var events: AsyncStream<WiFiEvent> { AsyncStream { $0.finish() } }
+    func cachedScan() -> [AccessPoint] { cached }
+    func scan() async throws -> [AccessPoint] {
+        scanTimes.append(clock?.date ?? t0)
+        if let duringScan { await duringScan() }
+        return try scans.isEmpty ? defaultScan : scans.removeFirst().get()
+    }
+    var events: AsyncStream<WiFiEvent> { eventStream }
+    func emit(_ events: WiFiEvent...) { for event in events { eventContinuation.yield(event) } }
 }
 
 private final class FakeConfig: NetworkConfigSource {
@@ -41,27 +62,35 @@ private final class FakeConfig: NetworkConfigSource {
 
 private final class FakeNeighbors: NeighborSource {
     var answers: [MACAddress?] = []
+    /// Returned once `answers` runs out.
+    var answer: MACAddress?
     var lookups = 0
+    var log: CallLog?
     /// Runs while the lookup is suspended, before it answers.
     var duringLookup: (() async -> Void)?
     func hardwareAddress(forIPv4 ip: String) async -> MACAddress? {
         lookups += 1
+        log?.entries.append("arp")
         if let duringLookup { await duringLookup() }
-        return answers.isEmpty ? nil : answers.removeFirst()
+        return answers.isEmpty ? answer : answers.removeFirst()
     }
 }
 
 private final class FakeProber: Prober {
     var pingCount = 0
     var publicIPCount = 0
+    var internetCount = 0
+    var log: CallLog?
     /// Answers for successive pings; 2 ms once they run out.
-    var pingResults: [Double?] = []
-    func ping(_ ip: String) async -> Double? {
+    var pingResults: [PingResult] = []
+    var dnsResult: PingResult = .reply(10)
+    func ping(_ ip: String) async -> PingResult {
         pingCount += 1
-        return pingResults.isEmpty ? 2 : pingResults.removeFirst()
+        log?.entries.append("ping")
+        return pingResults.isEmpty ? .reply(2) : pingResults.removeFirst()
     }
-    func dnsLatency(server: String) async -> Double? { 10 }
-    func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) { (.online, 30) }
+    func dnsLatency(server: String) async -> PingResult { dnsResult }
+    func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) { internetCount += 1; return (.online, 30) }
     func publicIP() async -> String? { publicIPCount += 1; return "203.0.113.5" }
 }
 
@@ -69,13 +98,84 @@ private final class FakeLocation: LocationAuthorizing {
     var isAuthorized = true
     var isDetermined = true
     func request() {}
-    var changes: AsyncStream<Void> { AsyncStream { $0.finish() } }
+    let (changeStream, changeContinuation) = AsyncStream<Void>.makeStream()
+    var changes: AsyncStream<Void> { changeStream }
+}
+
+/// Counts vendor lookups, to see when the twin detector runs.
+private final class CountingVendors: VendorLookup, @unchecked Sendable {
+    var lookups = 0
+    func vendor(for address: MACAddress) -> String? { lookups += 1; return nil }
 }
 
 private let t0 = Date(timeIntervalSince1970: 1_000_000)
 
 private final class Clock {
     var date = t0
+}
+
+/// The Engine's injected sleep. Closed, sleepers wait; open, they return at once. Either way the clock moves on by
+/// the time slept, so debounce and spacing are checked without wall-clock waits.
+@MainActor
+private final class Gate {
+    let clock: Clock
+    private(set) var isOpen = false
+    private var waiters: [(TimeInterval, CheckedContinuation<Void, Never>)] = []
+    /// Every sleep asked for, in seconds.
+    private(set) var sleeps: [TimeInterval] = []
+
+    init(clock: Clock) { self.clock = clock }
+
+    func sleep(_ seconds: TimeInterval) async -> Bool {
+        sleeps.append(seconds)
+        if isOpen {
+            clock.date += seconds
+            return true
+        }
+        await withCheckedContinuation { waiters.append((seconds, $0)) }
+        return true
+    }
+
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters = []
+        for (seconds, continuation) in pending {
+            clock.date += seconds
+            continuation.resume()
+        }
+    }
+}
+
+/// Opens the gate and waits until no automatic scan is armed or running.
+@MainActor
+private func settleScans(_ engine: Engine, _ gate: Gate) async {
+    gate.open()
+    var finished: Task<Void, Never>?
+    while let task = engine.armedScanTask, task != finished {
+        await task.value
+        finished = task
+    }
+}
+
+/// Finishes the fake's event streams and waits until the Engine has handled every event.
+@MainActor
+private func drainEvents(_ engine: Engine, wifi: FakeWiFi? = nil, location: FakeLocation? = nil) async {
+    if let wifi {
+        wifi.eventContinuation.finish()
+        await engine.loopTask("wifiEvents")?.value
+    }
+    if let location {
+        location.changeContinuation.finish()
+        await engine.loopTask("locationChanges")?.value
+    }
+}
+
+/// Waits until no probe round is running.
+@MainActor
+private func settleProbes(_ engine: Engine) async {
+    await engine.refreshProbes()
+    for _ in 0..<1000 where engine.isProbing { await Task.yield() }
 }
 
 @MainActor
@@ -87,16 +187,19 @@ private final class Recorder {
 private func makeEngine(wifi: FakeWiFi = FakeWiFi(), config: FakeConfig = FakeConfig(),
                         neighbors: FakeNeighbors = FakeNeighbors(), prober: FakeProber = FakeProber(),
                         location: FakeLocation = FakeLocation(),
-                        settings: EngineSettings = EngineSettings(), clock: Clock = Clock()) -> Engine {
-    Engine(wifi: wifi, config: config, neighbors: neighbors, prober: prober, location: location,
-           vendors: VendorTable.empty, settings: settings, now: { clock.date })
+                        settings: EngineSettings = EngineSettings(), clock: Clock = Clock(), gate: Gate? = nil,
+                        vendors: VendorLookup = VendorTable.empty) -> Engine {
+    wifi.clock = clock
+    let gate = gate ?? { let open = Gate(clock: clock); open.open(); return open }()
+    return Engine(wifi: wifi, config: config, neighbors: neighbors, prober: prober, location: location,
+                  vendors: vendors, settings: settings, now: { clock.date }, sleep: { await gate.sleep($0) })
 }
 
 @MainActor
-private func makeDemoEngine(_ scenario: DemoScenario, recorder: Recorder) -> Engine {
-    let s = demoSources(scenario)
+private func makeDemoEngine(_ scenario: DemoScenario, recorder: Recorder, clock: Clock = Clock()) -> Engine {
+    let s = demoSources(scenario, now: { clock.date })
     let engine = Engine(wifi: s.wifi, config: s.config, neighbors: s.neighbors, prober: s.prober,
-                        location: s.location, vendors: s.vendors, settings: EngineSettings(), now: { t0 })
+                        location: s.location, vendors: s.vendors, settings: EngineSettings(), now: { clock.date })
     engine.onNewFindings = { recorder.calls.append($0) }
     return engine
 }
@@ -448,7 +551,7 @@ struct EngineTests {
         let neighbors = FakeNeighbors()
         neighbors.answers = [mac("00:0b:86:aa:00:01"), mac("00:14:6c:aa:00:02")]
         let prober = FakeProber()
-        prober.pingResults = [nil, 2]   // the stale probe's ping is lost
+        prober.pingResults = [.timeout, .reply(2)]   // the stale probe's ping is lost
         let engine = makeEngine(config: config, neighbors: neighbors, prober: prober)
         engine.refreshLink()
         neighbors.duringLookup = {
@@ -523,5 +626,297 @@ struct EngineTests {
             let s = demoSources(scenario)
             #expect(s.wifi.cachedScan().allSatisfy { $0.bssid.map { !$0.isLocallyAdministered } ?? true })
         }
+    }
+
+    @Test func gatewayChangeDemoTurnsRedAfterItsSwitch() async {
+        let recorder = Recorder()
+        let clock = Clock()
+        let engine = makeDemoEngine(.gatewayChange, recorder: recorder, clock: clock)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectedVerdict == .clear)
+        clock.date = t0 + 20   // the demo's router answers differently from 15 s on
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectedVerdict == .suspect)
+        #expect(engine.snapshot.findings.map(\.signal) == [.gatewayChanged])
+    }
+
+    // MARK: Scan scheduling (I2, I4, M7, Task 7)
+
+    @Test func joinRunsOneDebouncedScan() async {
+        let wifi = FakeWiFi()
+        wifi.wifiState = .notConnected
+        wifi.link = nil
+        let clock = Clock()
+        let gate = Gate(clock: clock)
+        let engine = makeEngine(wifi: wifi, settings: EngineSettings(scanInterval: nil), clock: clock, gate: gate)
+        engine.start()
+        defer { engine.stop() }
+        wifi.wifiState = .connected
+        wifi.link = makeLink("Corp", "00:0b:86:00:00:01")
+        wifi.emit(.ssidChanged, .bssidChanged, .linkChanged)
+        await drainEvents(engine, wifi: wifi)
+        await settleScans(engine, gate)
+        #expect(wifi.scanCount == 1)
+        #expect(wifi.scanTimes.first == t0 + 2)
+    }
+
+    @Test func leavingRunsNoScan() async {
+        let wifi = FakeWiFi()
+        let clock = Clock()
+        let gate = Gate(clock: clock)
+        let engine = makeEngine(wifi: wifi, settings: EngineSettings(scanInterval: nil), clock: clock, gate: gate)
+        engine.start()   // connected and authorised: one scan
+        defer { engine.stop() }
+        await settleScans(engine, gate)
+        #expect(wifi.scanCount == 1)
+        wifi.wifiState = .notConnected
+        wifi.link = nil
+        wifi.emit(.ssidChanged, .bssidChanged)
+        await drainEvents(engine, wifi: wifi)
+        await settleScans(engine, gate)
+        #expect(wifi.scanCount == 1)
+    }
+
+    @Test func wifiOffRunsNoAutomaticScanAndSetsNoError() async {
+        let wifi = FakeWiFi()
+        wifi.wifiState = .off
+        wifi.link = nil
+        let clock = Clock()
+        let gate = Gate(clock: clock)
+        let engine = makeEngine(wifi: wifi, settings: EngineSettings(scanInterval: nil), clock: clock, gate: gate)
+        engine.start()
+        defer { engine.stop() }
+        engine.requestScan()   // what the background timer does
+        wifi.emit(.powerChanged, .ssidChanged, .bssidChanged)
+        await drainEvents(engine, wifi: wifi)
+        await settleScans(engine, gate)
+        #expect(wifi.scanCount == 0)
+        #expect(engine.snapshot.scanError == nil)
+    }
+
+    @Test func locationGrantedMidRunScansOnceWithNames() async {
+        let wifi = FakeWiFi()
+        wifi.cached = [ap(nil, nil), ap(nil, nil, ch: 149)]
+        wifi.defaultScan = [ap("Corp", "00:0b:86:00:00:01"), ap("Corp", "00:0b:86:00:00:02", ch: 149)]
+        let location = FakeLocation()
+        location.isAuthorized = false
+        let clock = Clock()
+        let gate = Gate(clock: clock)
+        let engine = makeEngine(wifi: wifi, location: location, settings: EngineSettings(scanInterval: nil),
+                                clock: clock, gate: gate)
+        engine.start()
+        defer { engine.stop() }
+        #expect(engine.snapshot.scan.allSatisfy { $0.ssid == nil })
+        location.isAuthorized = true
+        location.changeContinuation.yield()
+        await drainEvents(engine, location: location)
+        await settleScans(engine, gate)
+        #expect(wifi.scanCount == 1)
+        #expect(engine.snapshot.scan.count == 2)
+        #expect(engine.snapshot.scan.allSatisfy { $0.ssid == "Corp" })
+    }
+
+    @Test func requestDuringScanRunsExactlyOneMore() async {
+        let wifi = FakeWiFi()
+        let clock = Clock()
+        let gate = Gate(clock: clock)
+        let engine = makeEngine(wifi: wifi, settings: EngineSettings(scanInterval: nil), clock: clock, gate: gate)
+        engine.refreshLink()
+        wifi.duringScan = {
+            wifi.duringScan = nil
+            await MainActor.run {
+                engine.requestScan()
+                engine.requestScan()
+            }
+            await engine.scanNow()   // never overlaps: marks the same rerun
+        }
+        await engine.scanNow()
+        await settleScans(engine, gate)
+        #expect(wifi.scanCount == 2)
+        #expect(wifi.scanTimes == [t0, t0 + 10])   // the rerun keeps the 10 s spacing
+    }
+
+    @Test func automaticScanKeepsSpacingAfterScanNow() async {
+        let wifi = FakeWiFi()
+        let clock = Clock()
+        let gate = Gate(clock: clock)
+        let engine = makeEngine(wifi: wifi, settings: EngineSettings(scanInterval: nil), clock: clock, gate: gate)
+        engine.refreshLink()
+        await engine.scanNow()
+        engine.requestScan()
+        await settleScans(engine, gate)
+        #expect(wifi.scanTimes == [t0, t0 + 10])
+    }
+
+    @Test func requestsCoalesceIntoOneScan() async {
+        let wifi = FakeWiFi()
+        let clock = Clock()
+        let gate = Gate(clock: clock)
+        let engine = makeEngine(wifi: wifi, settings: EngineSettings(scanInterval: nil), clock: clock, gate: gate)
+        engine.refreshLink()
+        engine.requestScan()
+        engine.requestScan()
+        engine.requestScan()
+        await settleScans(engine, gate)
+        #expect(wifi.scanTimes == [t0 + 2])
+    }
+
+    // MARK: Cached seed and detector cache (M8, M5)
+
+    @Test func cachedSeedIsShownButRaisesNothing() async {
+        let wifi = FakeWiFi()
+        wifi.cached = [ap("Corp", "00:0b:86:00:00:01", ch: 36), ap("Corp", "00:0b:86:00:00:01", ch: 149)]
+        let clock = Clock()
+        let gate = Gate(clock: clock)
+        let engine = makeEngine(wifi: wifi, settings: EngineSettings(scanInterval: nil), clock: clock, gate: gate)
+        engine.start()
+        defer { engine.stop() }
+        #expect(engine.snapshot.scan.count == 2)
+        #expect(engine.snapshot.findings.isEmpty)
+        #expect(engine.snapshot.connectedVerdict == .clear)
+        await settleScans(engine, gate)
+    }
+
+    @Test func twinDetectorRunsOncePerScan() async {
+        let wifi = FakeWiFi()
+        wifi.scans = [.success([ap("Corp", "00:0b:86:00:00:01"), ap("Corp", "00:0b:86:00:00:02")])]
+        let vendors = CountingVendors()
+        let engine = makeEngine(wifi: wifi, vendors: vendors)
+        engine.refreshLink()
+        await engine.scanNow()
+        let afterScan = vendors.lookups
+        #expect(afterScan > 0)
+        for _ in 0..<5 { engine.refreshLink() }
+        await engine.refreshProbes()
+        #expect(vendors.lookups == afterScan)
+    }
+
+    // MARK: Session boundaries (I5)
+
+    @Test func reassociationToSameNameStartsNewSession() async {
+        let wifi = FakeWiFi()
+        let neighbors = FakeNeighbors()
+        neighbors.answer = mac("00:14:6c:aa:00:01")
+        let clock = Clock()
+        let recorder = Recorder()
+        let engine = makeEngine(wifi: wifi, neighbors: neighbors, settings: EngineSettings(scanInterval: nil),
+                                clock: clock)
+        engine.onNewFindings = { recorder.calls.append($0) }
+        engine.start()
+        defer { engine.stop() }
+        await settleProbes(engine)
+        #expect(engine.snapshot.connectivity.gatewayMAC == mac("00:14:6c:aa:00:01"))
+        clock.date = t0 + 60
+        neighbors.answer = mac("50:c7:bf:aa:00:02")
+        wifi.emit(.ssidChanged)   // same name, no nil link read in between
+        await drainEvents(engine, wifi: wifi)
+        clock.date = t0 + 90
+        await settleProbes(engine)
+        await settleProbes(engine)
+        #expect(engine.snapshot.connectivity.gatewayMAC == mac("50:c7:bf:aa:00:02"))
+        #expect(engine.snapshot.connectedVerdict == .clear)
+        #expect(engine.snapshot.findings.isEmpty)
+        #expect(recorder.calls.isEmpty)
+    }
+
+    @Test func wakeStartsNewSession() async {
+        let neighbors = FakeNeighbors()
+        neighbors.answer = mac("00:14:6c:aa:00:01")
+        let clock = Clock()
+        let engine = makeEngine(neighbors: neighbors, clock: clock)
+        engine.refreshLink()
+        await settleProbes(engine)
+        clock.date = t0 + 60
+        neighbors.answer = mac("50:c7:bf:aa:00:02")
+        engine.noteWake()
+        clock.date = t0 + 90
+        await settleProbes(engine)
+        await settleProbes(engine)
+        #expect(engine.snapshot.connectivity.gatewayMAC == mac("50:c7:bf:aa:00:02"))
+        #expect(engine.snapshot.connectedVerdict == .clear)
+        #expect(engine.snapshot.findings.isEmpty)
+    }
+
+    // MARK: Probes (I3, I1, M2, Task 9)
+
+    @Test func probesRunOnlyWhenConnected() async {
+        let wifi = FakeWiFi()
+        let prober = FakeProber()
+        let neighbors = FakeNeighbors()
+        neighbors.answer = mac("00:14:6c:aa:00:01")
+        let engine = makeEngine(wifi: wifi, neighbors: neighbors, prober: prober)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.gatewayIP != nil)
+        let pings = prober.pingCount, checks = prober.internetCount
+        wifi.wifiState = .notConnected
+        await engine.refreshProbes()
+        await engine.refreshPublicIP()
+        #expect(prober.pingCount == pings)
+        #expect(prober.internetCount == checks)
+        #expect(prober.publicIPCount == 0)
+        #expect(engine.snapshot.connectivity == ConnectivitySnapshot())
+    }
+
+    @Test func blockedPingIsNotLoss() async {
+        let prober = FakeProber()
+        prober.pingResults = [.blocked, .reply(2)]
+        prober.dnsResult = .blocked
+        let engine = makeEngine(prober: prober)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        var c = engine.snapshot.connectivity
+        #expect(c.gatewayBlocked)
+        #expect(c.gatewayLatencyMs == nil)
+        #expect(c.gatewayLossPercent == nil)
+        #expect(c.dnsBlocked)
+        #expect(c.dnsLatencyMs == nil)
+        prober.dnsResult = .reply(10)
+        await engine.refreshProbes()
+        c = engine.snapshot.connectivity
+        #expect(!c.gatewayBlocked && !c.dnsBlocked)
+        #expect(c.gatewayLossPercent == 0)
+    }
+
+    @Test func timedOutPingIsLoss() async {
+        let prober = FakeProber()
+        prober.pingResults = [.timeout]
+        let engine = makeEngine(prober: prober)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.gatewayLossPercent == 100)
+        #expect(!engine.snapshot.connectivity.gatewayBlocked)
+    }
+
+    @Test func pingRunsBeforeARPLookup() async {
+        let log = CallLog()
+        let prober = FakeProber()
+        prober.log = log
+        let neighbors = FakeNeighbors()
+        neighbors.log = log
+        let engine = makeEngine(neighbors: neighbors, prober: prober)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(log.entries == ["ping", "arp"])
+    }
+
+    @Test func missingARPAnswerKeepsLastGatewayAddress() async {
+        let neighbors = FakeNeighbors()
+        neighbors.answers = [mac("00:14:6c:aa:00:01"), nil]
+        let engine = makeEngine(neighbors: neighbors)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        await engine.refreshProbes()
+        #expect(neighbors.lookups == 2)
+        #expect(engine.snapshot.connectivity.gatewayMAC == mac("00:14:6c:aa:00:01"))
+    }
+
+    @Test func monitoringErrorReachesSnapshot() {
+        let wifi = FakeWiFi()
+        wifi.monitoringError = "Event monitoring refused"
+        let engine = makeEngine(wifi: wifi)
+        engine.refreshLink()
+        #expect(engine.snapshot.eventMonitoringError == "Event monitoring refused")
     }
 }
