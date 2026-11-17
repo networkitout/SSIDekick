@@ -7,14 +7,16 @@ public enum QualityLevel: Int, Sendable, Comparable {
     public static func < (lhs: QualityLevel, rhs: QualityLevel) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
-/// Signal strength: good down to -60 dBm, fair down to -70 dBm, poor below.
+/// Signal strength: good down to -60 dBm, fair down to -70 dBm, poor below. CoreWLAN reports 0 when a reading
+/// fails, so 0 or above is unknown.
 public func signalLevel(rssi: Int) -> QualityLevel {
-    rssi >= -60 ? .good : rssi >= -70 ? .fair : .poor
+    rssi >= 0 ? .unknown : rssi >= -60 ? .good : rssi >= -70 ? .fair : .poor
 }
 
-/// Signal bars, 1 to 4: -55 and above 4, down to -65 3, down to -75 2, below 1.
+/// Signal bars, 0 to 4: 0 for a missing reading (0 or above), then -55 and above 4, down to -65 3, down to -75 2,
+/// below 1.
 public func signalBars(rssi: Int) -> Int {
-    rssi >= -55 ? 4 : rssi >= -65 ? 3 : rssi >= -75 ? 2 : 1
+    rssi >= 0 ? 0 : rssi >= -55 ? 4 : rssi >= -65 ? 3 : rssi >= -75 ? 2 : 1
 }
 
 /// Signal-to-noise ratio: good from 25 dB, fair from 15 dB, poor below.
@@ -22,9 +24,16 @@ public func snrLevel(_ snr: Int) -> QualityLevel {
     snr >= 25 ? .good : snr >= 15 ? .fair : .poor
 }
 
-/// Gateway round trip: good under 20 ms, fair up to 100 ms, poor above.
-public func gatewayLatencyLevel(_ ms: Double?) -> QualityLevel {
-    guard let ms else { return .unknown }
+/// Signal-to-noise from the two readings; unknown when either is missing (0 or above).
+public func snrLevel(rssi: Int, noise: Int) -> QualityLevel {
+    rssi >= 0 || noise >= 0 ? .unknown : snrLevel(rssi - noise)
+}
+
+/// Gateway round trip: good under 20 ms, fair up to 100 ms, poor above. Classifies the whole milliseconds the
+/// menu shows.
+public func gatewayLatencyLevel(_ value: Double?) -> QualityLevel {
+    guard let value else { return .unknown }
+    let ms = value.rounded()
     return ms < 20 ? .good : ms <= 100 ? .fair : .poor
 }
 
@@ -34,9 +43,10 @@ public func lossLevel(_ percent: Int?) -> QualityLevel {
     return percent <= 0 ? .good : percent <= 5 ? .fair : .poor
 }
 
-/// DNS query time: good under 50 ms, fair up to 200 ms, poor above.
-public func dnsLatencyLevel(_ ms: Double?) -> QualityLevel {
-    guard let ms else { return .unknown }
+/// DNS query time: good under 50 ms, fair up to 200 ms, poor above. Classifies the whole milliseconds the menu shows.
+public func dnsLatencyLevel(_ value: Double?) -> QualityLevel {
+    guard let value else { return .unknown }
+    let ms = value.rounded()
     return ms < 50 ? .good : ms <= 200 ? .fair : .poor
 }
 

@@ -57,11 +57,11 @@ public func twinWarning(for snapshot: Snapshot) -> WarningLine? {
     let verdicts = Set(mine.map(\.bssid)).map { address in verdict(for: mine.filter { $0.bssid == address }) }
     guard let worst = verdicts.max(), worst >= .worthALook else { return nil }
     let count = verdicts.filter { $0 == worst }.count
-    let text = worst == .suspect ? "⚠ \(count) suspect \(count == 1 ? "twin" : "twins")" : "⚠ \(count) worth a look"
+    let text = worst == .suspect ? "\(count) suspect \(count == 1 ? "twin" : "twins")" : "\(count) worth a look"
     return WarningLine(text: text, verdict: worst)
 }
 
-/// The connection line: "⚠ Gateway changed", "⚠ DNS servers changed" or "⚠ Gateway and DNS changed".
+/// The connection line: "Gateway changed", "DNS servers changed" or "Gateway and DNS changed".
 public func connectionWarning(for snapshot: Snapshot) -> WarningLine? {
     guard snapshot.connectedVerdict >= .worthALook, let ssid = snapshot.link?.ssid else { return nil }
     let mine = connectionFindings(ssid: ssid, in: snapshot.findings)
@@ -70,9 +70,9 @@ public func connectionWarning(for snapshot: Snapshot) -> WarningLine? {
     let signals = Set(mine.map(\.signal))
     let text: String
     switch (signals.contains(.gatewayChanged), signals.contains(.dnsChanged)) {
-    case (true, true): text = "⚠ Gateway and DNS changed"
-    case (true, false): text = "⚠ Gateway changed"
-    case (false, true): text = "⚠ DNS servers changed"
+    case (true, true): text = "Gateway and DNS changed"
+    case (true, false): text = "Gateway changed"
+    case (false, true): text = "DNS servers changed"
     case (false, false): return nil
     }
     return WarningLine(text: text, verdict: bucket)
@@ -89,7 +89,7 @@ public func statusAccessibilityLabel(for snapshot: Snapshot) -> String {
     guard isOnNetwork(snapshot) else { return "WiFiUtil: not connected" }
     switch snapshot.connectedVerdict {
     case .suspect, .worthALook:
-        let lines = warningLines(for: snapshot).map { String($0.text.drop { $0 == "⚠" || $0 == " " }) }
+        let lines = warningLines(for: snapshot).map(\.text)
         if !lines.isEmpty { return "WiFiUtil: " + lines.joined(separator: "; ") }
         return snapshot.connectedVerdict == .suspect ? "WiFiUtil: suspect" : "WiFiUtil: worth a look"
     case .clear, .note:

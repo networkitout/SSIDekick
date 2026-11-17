@@ -225,7 +225,7 @@ struct EngineTests {
         plane.refreshLink()
         await plane.scanNow()
         #expect(statusGlyph(for: plane.snapshot) == StatusGlyph(symbol: "antenna.radiowaves.left.and.right", tint: .orange))
-        #expect(warningLines(for: plane.snapshot).map(\.text) == ["⚠ 1 worth a look"])
+        #expect(warningLines(for: plane.snapshot).map(\.text) == ["1 worth a look"])
 
         let office = makeDemoEngine(.office, recorder: recorder)
         office.refreshLink()

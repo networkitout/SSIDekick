@@ -7,6 +7,7 @@ import WiFiCore
         #expect(signalLevel(rssi: -61) == .fair)
         #expect(signalLevel(rssi: -70) == .fair)
         #expect(signalLevel(rssi: -71) == .poor)
+        #expect(signalLevel(rssi: 0) == .unknown)
     }
 
     @Test func bars() {
@@ -16,6 +17,7 @@ import WiFiCore
         #expect(signalBars(rssi: -66) == 2)
         #expect(signalBars(rssi: -75) == 2)
         #expect(signalBars(rssi: -76) == 1)
+        #expect(signalBars(rssi: 0) == 0)
     }
 
     @Test func snr() {
@@ -25,11 +27,19 @@ import WiFiCore
         #expect(snrLevel(14) == .poor)
     }
 
+    @Test func snrFromReadings() {
+        #expect(snrLevel(rssi: -58, noise: -92) == .good)
+        #expect(snrLevel(rssi: -60, noise: 0) == .unknown)
+        #expect(snrLevel(rssi: 0, noise: -90) == .unknown)
+    }
+
     @Test func gatewayLatency() {
-        #expect(gatewayLatencyLevel(19.9) == .good)
+        #expect(gatewayLatencyLevel(19.4) == .good)
+        #expect(gatewayLatencyLevel(19.6) == .fair)
         #expect(gatewayLatencyLevel(20) == .fair)
         #expect(gatewayLatencyLevel(100) == .fair)
-        #expect(gatewayLatencyLevel(100.1) == .poor)
+        #expect(gatewayLatencyLevel(100.4) == .fair)
+        #expect(gatewayLatencyLevel(100.6) == .poor)
         #expect(gatewayLatencyLevel(nil) == .unknown)
     }
 
@@ -42,10 +52,12 @@ import WiFiCore
     }
 
     @Test func dnsLatency() {
-        #expect(dnsLatencyLevel(49.9) == .good)
+        #expect(dnsLatencyLevel(49.4) == .good)
+        #expect(dnsLatencyLevel(49.6) == .fair)
         #expect(dnsLatencyLevel(50) == .fair)
         #expect(dnsLatencyLevel(200) == .fair)
-        #expect(dnsLatencyLevel(200.1) == .poor)
+        #expect(dnsLatencyLevel(200.4) == .fair)
+        #expect(dnsLatencyLevel(200.6) == .poor)
         #expect(dnsLatencyLevel(nil) == .unknown)
     }
 

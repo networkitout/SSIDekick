@@ -25,6 +25,14 @@ import Testing
         #expect(devices[0].addressPattern == "a4:b1:c2:00:01:x")
     }
 
+    @Test func locallyAdministeredLowestRadioGivesThePattern() {
+        let aps = [ap("Home", "a6:b1:c2:00:01:10"), ap("Home", "a4:b1:c2:00:01:11")]
+        let devices = groupDevices(aps, findings: [])
+        #expect(devices.count == 1)
+        #expect(devices[0].id == "a6:b1:c2:00:01:10")
+        #expect(devices[0].addressPattern == "a6:b1:c2:00:01:x")
+    }
+
     @Test func spanOfSixteenStartsANewDevice() {
         let aps = [radio("01:10", rssi: -50), radio("01:14", rssi: -51), radio("01:20", rssi: -60), radio("01:24", rssi: -61)]
         let devices = groupDevices(aps, findings: [])
