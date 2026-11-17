@@ -7,6 +7,7 @@ import WiFiSystem
 struct MenuContentView: View {
     let engine: Engine
     let vendors: VendorLookup
+    @Environment(\.openWindow) private var openWindow
 
     private static let locationSettings =
         URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")!
@@ -41,7 +42,11 @@ struct MenuContentView: View {
                     Text(link.ssid ?? "Unnamed network").font(.system(size: 13, weight: .semibold))
                     Spacer()
                     if let warning = twinWarning(for: snapshot) {
-                        Text(warning).foregroundStyle(snapshot.connectedVerdict == .suspect ? .red : .orange)
+                        // Opens the scan window, whose connected group starts expanded.
+                        Button(action: openScanWindow) {
+                            Text(warning).foregroundStyle(snapshot.connectedVerdict == .suspect ? .red : .orange)
+                        }
+                        .buttonStyle(.borderless)
                     }
                 }
             } else {
@@ -63,7 +68,7 @@ struct MenuContentView: View {
 
     private var locationHint: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Network names are hidden until Location Services is allowed")
+            Text(locationHintText)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Open Location Services settings") { NSWorkspace.shared.open(Self.locationSettings) }
         }
@@ -122,8 +127,7 @@ struct MenuContentView: View {
 
     private var actions: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Enabled by Task 11 (scan window).
-            menuButton("Nearby networks…") {}.disabled(true)
+            menuButton("Nearby networks…", action: openScanWindow)
             HStack {
                 menuButton("Scan now") { Task { await engine.scanNow() } }
                 menuButton("Copy report") { copyReport() }
@@ -134,6 +138,15 @@ struct MenuContentView: View {
                 menuButton("Quit") { NSApplication.shared.terminate(nil) }
             }
         }
+    }
+
+    private func openScanWindow() {
+        // The popover is the key window until the scan window opens; hide it by hand because SwiftUI may not.
+        // Not checked visually: if SwiftUI already dismisses the popover, orderOut on it is harmless.
+        let popover = NSApp.keyWindow
+        openWindow(id: scanWindowID)
+        NSApp.activate()
+        popover?.orderOut(nil)
     }
 
     private func menuButton(_ title: String, action: @escaping () -> Void) -> some View {
@@ -147,26 +160,5 @@ struct MenuContentView: View {
         let report = formatReport(engine.snapshot, vendors: vendors, now: Date())
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(report, forType: .string)
-    }
-
-    // MARK: Names
-
-    private func bandName(_ band: Band) -> String {
-        switch band {
-        case .ghz2_4: "2.4 GHz"
-        case .ghz5: "5 GHz"
-        case .ghz6: "6 GHz"
-        }
-    }
-
-    private func securityName(_ mode: SecurityMode?) -> String {
-        switch mode {
-        case .open: "Open"
-        case .wep: "WEP"
-        case .wpa: "WPA"
-        case .wpa2: "WPA2"
-        case .wpa3: "WPA3"
-        case nil: "–"
-        }
     }
 }

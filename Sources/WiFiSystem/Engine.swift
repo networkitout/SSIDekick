@@ -56,7 +56,8 @@ public final class Engine {
     @ObservationIgnored private var connectionEpoch = 0
     /// True from a session change until a probe for the new session completes.
     @ObservationIgnored private var probesStale = false
-    @ObservationIgnored private var scanning = false
+    /// True while a full scan runs; the scan window disables "Scan now" meanwhile.
+    public private(set) var isScanning = false
     @ObservationIgnored private var probing = false
     /// A probe was asked for while one was in flight.
     @ObservationIgnored private var probeRequested = false
@@ -260,9 +261,9 @@ public final class Engine {
 
     /// Runs a full scan, then re-evaluates findings. A failed scan keeps the previous results.
     public func scanNow() async {
-        guard !scanning else { return }
-        scanning = true
-        defer { scanning = false }
+        guard !isScanning else { return }
+        isScanning = true
+        defer { isScanning = false }
         do {
             let result = try await wifi.scan()
             snapshot.scan = result

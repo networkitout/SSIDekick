@@ -38,6 +38,11 @@ struct WiFiUtilApp: App {
             StatusIcon(snapshot: engine.snapshot)
         }
         .menuBarExtraStyle(.window)
+
+        Window("Nearby networks", id: scanWindowID) {
+            ScanWindowView(engine: engine, vendors: vendors)
+        }
+        .defaultSize(width: 820, height: 520)
     }
 
     /// The vendor table copied into Contents/Resources by scripts/build-app.sh; empty if missing or unreadable.
