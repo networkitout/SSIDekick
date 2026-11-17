@@ -98,4 +98,81 @@ private extension String { func leftPad() -> String { count < 2 ? "0" + self : s
     @Test func differentNamesNeverCompared() {
         #expect(detector.findings(in: [ap("A", acme(1), sec: [.open]), ap("B", acme(2))]).isEmpty)
     }
+
+    // MARK: Security across mixed-WPA routers (C1)
+
+    @Test func triBandRouterIsSilent() {
+        let scan = [
+            ap("Home", "a4:b1:c2:00:01:00", ch: 6, band: .ghz2_4, width: 20, sec: [.wpa2, .wpa3]),
+            ap("Home", "a4:b1:c2:00:01:01", ch: 44, sec: [.wpa2, .wpa3]),
+            ap("Home", "a4:b1:c2:00:01:02", ch: 37, band: .ghz6, width: 160, sec: [.wpa3]),
+        ]
+        #expect(detector.findings(in: scan).isEmpty)
+    }
+    @Test func twoRadioSplitSecurityIsSilent() {
+        let scan = [
+            ap("Home", "a4:b1:c2:00:01:00", ch: 6, band: .ghz2_4, width: 20, sec: [.wpa2]),
+            ap("Home", "a4:b1:c2:00:01:01", ch: 44, sec: [.wpa3]),
+        ]
+        #expect(detector.findings(in: scan).isEmpty)
+    }
+    @Test func openTwinBesideOneWPA2() throws {
+        let found = detector.findings(in: [ap("Corp", acme(1)), ap("Corp", acme(2), sec: [.open])])
+        #expect(found.map(\.signal) == [.securityMismatch])
+        let f = try #require(found.first)
+        #expect(f.bssid == MACAddress(acme(2)))
+        #expect(f.reason == "Open, while 1 other named Corp uses WPA2")
+        #expect(verdict(for: found) == .suspect)
+    }
+    @Test func wepTwinBesideOneWPA3() {
+        let found = detector.findings(in: [ap("Corp", acme(1), sec: [.wpa3]), ap("Corp", acme(2), sec: [.wep])])
+        #expect(found.map(\.signal) == [.securityMismatch])
+    }
+    @Test func weakerGenerationThanMajority() throws {
+        let scan = [ap("Corp", acme(1), sec: [.wpa3]), ap("Corp", acme(2), sec: [.wpa3]),
+                    ap("Corp", acme(3), sec: [.wpa3]), ap("Corp", acme(4), sec: [.wpa2])]
+        let found = detector.findings(in: scan)
+        #expect(found.map(\.signal) == [.securityMismatch])
+        let f = try #require(found.first)
+        #expect(f.bssid == MACAddress(acme(4)))
+        #expect(f.reason == "WPA2, while 3 others named Corp use WPA3")
+    }
+    @Test func evenGenerationSplitIsSilent() {
+        let scan = [ap("Corp", acme(1), sec: [.wpa2]), ap("Corp", acme(2), sec: [.wpa2]),
+                    ap("Corp", acme(3), sec: [.wpa3]), ap("Corp", acme(4), sec: [.wpa3])]
+        #expect(detector.findings(in: scan).isEmpty)
+    }
+
+    // MARK: Reason grammar
+
+    @Test func oneSiblingReasonIsSingular() {
+        let found = detector.findings(in: [ap("Corp", acme(1)), ap("Corp", "02:11:22:33:44:55")])
+        #expect(found.map(\.reason) == ["Software-assigned address, while 1 other named Corp uses hardware addresses"])
+    }
+
+    // MARK: Vendor names
+
+    @Test func vendorKeyNormalises() {
+        #expect(vendorKey("Ubiquiti Inc") == vendorKey("Ubiquiti Networks Inc."))
+        #expect(vendorKey("Cisco Systems, Inc") == vendorKey("Cisco Meraki"))
+        #expect(vendorKey("Shenzhen Foo Tech") != vendorKey("Shenzhen Bar Tech"))
+        #expect(vendorKey("Acme") != vendorKey("Other"))
+        #expect(vendorKey("The Shenzhen") == "the shenzhen")
+        #expect(vendorKey("Hon Hai Precision Ind. Co.,Ltd.") == "precision")
+    }
+    @Test func vendorSpellingVariantsAreOneVendor() {
+        let table = VendorTable(tsv: "A4B1C2\tUbiquiti Networks Inc.\nA4B1C3\tUbiquiti Inc\n")
+        let scan = [ap("Corp", "a4:b1:c2:00:00:01"), ap("Corp", "a4:b1:c2:00:00:02"), ap("Corp", "a4:b1:c3:00:00:03")]
+        #expect(TwinDetector(vendors: table).findings(in: scan).isEmpty)
+    }
+    @Test func vendorReasonDeterministicOnTie() {
+        let table = VendorTable(tsv: "0000A1\tZeta Corp\n0000B1\tBeta Ltd\n0000C1\tAcme\n")
+        let scan = [ap("Corp", "00:00:a1:00:00:01"), ap("Corp", "00:00:a1:00:00:02"),
+                    ap("Corp", "00:00:b1:00:00:01"), ap("Corp", "00:00:b1:00:00:02"),
+                    ap("Corp", "00:00:c1:00:00:01")]
+        for _ in 0..<20 {
+            let found = TwinDetector(vendors: table).findings(in: scan)
+            #expect(found.map(\.reason) == ["Made by Acme, while 2 others named Corp are made by Beta Ltd"])
+        }
+    }
 }

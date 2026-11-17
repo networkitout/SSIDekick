@@ -27,3 +27,19 @@ public struct VendorTable: VendorLookup {
         return names[address.oui]
     }
 }
+
+private let vendorStoplist: Set<String> = [
+    "the", "shenzhen", "hangzhou", "beijing", "shanghai", "guangdong", "guangzhou", "zhejiang", "nanjing",
+    "sichuan", "chengdu", "taiwan", "hon", "hai",
+]
+
+/// A comparison key for a vendor name, so spelling variants of one maker match ("Cisco Systems, Inc" and
+/// "Cisco Meraki" both give "cisco"): lowercased, punctuation removed, leading place and filler words dropped,
+/// first remaining word. When every word is a stop word, the whole normalised name.
+public func vendorKey(_ name: String) -> String {
+    let stripped = String(String.UnicodeScalarView(
+        name.lowercased().unicodeScalars.filter { !CharacterSet.punctuationCharacters.contains($0) }))
+    let tokens = stripped.split(whereSeparator: \.isWhitespace).map(String.init)
+    if let first = tokens.drop(while: { vendorStoplist.contains($0) }).first { return first }
+    return tokens.joined(separator: " ")
+}

@@ -5,6 +5,7 @@ public func occupiedChannels(_ channel: Channel) -> [Int] {
     let number = channel.number
     switch channel.band {
     case .ghz2_4:
+        guard (1...14).contains(number) else { return [number] }
         return Array(max(1, number - 4)...min(14, number + 4))
     case .ghz5:
         let segments = [36...64, 100...144, 149...177]

@@ -48,46 +48,68 @@ public struct TwinDetector: Sendable {
             func add(_ signal: Signal, _ reason: String) {
                 out.append(Finding(signal: signal, ssid: ssid, bssid: address, reason: reason))
             }
-            let others = siblings.count == 1 ? "1 other" : "\(siblings.count) others"
-
-            // Security: weaker than what most siblings use.
-            let counts = Dictionary(grouping: siblings, by: \.weakestSecurity).mapValues(\.count)
-            if let common = counts.max(by: { ($0.value, $0.key) < ($1.value, $1.key) }),
-               own.weakestSecurity < common.key {
-                add(.securityMismatch,
-                    "\(Self.name(own.weakestSecurity)), while \(common.value) \(common.value == 1 ? "other" : "others") named \(ssid) use \(Self.name(common.key))")
+            /// "1 other named X uses" / "N others named X use".
+            func othersUse(_ count: Int) -> String {
+                count == 1 ? "1 other named \(ssid) uses" : "\(count) others named \(ssid) use"
             }
 
-            // Vendor: nobody else has this vendor, yet at least two siblings agree on one.
+            if let (mode, count) = Self.strongerSecurity(own: own, siblings: siblings) {
+                add(.securityMismatch, "\(Self.name(own.weakestSecurity)), while \(othersUse(count)) \(Self.name(mode))")
+            }
+
+            // Vendor: nobody else has this vendor, yet at least two siblings agree on one. Names are compared by
+            // `vendorKey`, so spelling variants of one maker count as the same vendor; reasons print the names.
             if let vendor = vendors.vendor(for: address) {
                 let siblingVendors = siblings.compactMap { vendors.vendor(for: $0.bssid!) }
-                let vendorCounts = Dictionary(grouping: siblingVendors, by: { $0 }).mapValues(\.count)
-                if !siblingVendors.contains(vendor), let shared = vendorCounts.max(by: { $0.value < $1.value }),
-                   shared.value >= 2 {
-                    add(.vendorMismatch, "Made by \(vendor), while \(shared.value) others named \(ssid) are made by \(shared.key)")
+                let ownKey = vendorKey(vendor)
+                let byKey = Dictionary(grouping: siblingVendors, by: vendorKey)
+                if byKey[ownKey] == nil,
+                   let shared = byKey.max(by: { ($0.value.count, $1.key) < ($1.value.count, $0.key) }),
+                   shared.value.count >= 2 {
+                    let sharedName = shared.value.min()!
+                    add(.vendorMismatch, "Made by \(vendor), while \(shared.value.count) others named \(ssid) are made by \(sharedName)")
                 }
             }
 
             if address.isLocallyAdministered, !siblings.contains(where: { $0.bssid!.isLocallyAdministered }) {
-                add(.locallyAdministered, "Software-assigned address, while \(others) named \(ssid) use hardware addresses")
+                add(.locallyAdministered, "Software-assigned address, while \(othersUse(siblings.count)) hardware addresses")
             }
 
             // Weak signals need at least two siblings that all agree.
             if siblings.count >= 2 {
                 if let agreed = Self.unanimous(siblings.map(\.countryCode)), agreed != own.countryCode {
                     let mine = own.countryCode.map { "Country \($0)" } ?? "No country set"
-                    add(.countryMismatch, "\(mine), while \(others) named \(ssid) use \(agreed)")
+                    add(.countryMismatch, "\(mine), while \(othersUse(siblings.count)) \(agreed)")
                 }
                 if let agreed = Self.unanimous(siblings.map { Optional($0.beaconInterval) }), agreed != own.beaconInterval {
-                    add(.beaconMismatch, "Beacon interval \(own.beaconInterval) ms, while \(others) named \(ssid) use \(agreed) ms")
+                    add(.beaconMismatch, "Beacon interval \(own.beaconInterval) ms, while \(othersUse(siblings.count)) \(agreed) ms")
                 }
                 if let agreed = Self.unanimous(siblings.map(\.generation)), agreed != own.generation {
                     let mine = own.generation.map { "Wi-Fi \($0.rawValue)" } ?? "No Wi-Fi generation reported"
-                    add(.generationMismatch, "\(mine), while \(others) named \(ssid) use Wi-Fi \(agreed.rawValue)")
+                    add(.generationMismatch, "\(mine), while \(othersUse(siblings.count)) Wi-Fi \(agreed.rawValue)")
                 }
             }
         }
         return out
+    }
+
+    /// The security an access point falls short of, with how many siblings use it, or nil when it does not.
+    ///
+    /// Siblings compared: for a 2.4 or 5 GHz access point every sibling except 6 GHz ones (6 GHz requires WPA3, so a
+    /// tri-band router's lower radios would otherwise look weak); a 6 GHz access point compares against all.
+    /// - Open or WEP beside any sibling on WPA or better: always a mismatch.
+    /// - A weaker WPA generation: a mismatch only when the stronger siblings are a strict majority of the
+    ///   comparison group, the access point itself included, so a two-radio router split WPA2/WPA3 stays silent.
+    /// The mode named is the most common among the stronger siblings (ties go to the higher mode).
+    private static func strongerSecurity(own: AccessPoint, siblings: [AccessPoint]) -> (SecurityMode, Int)? {
+        let compared = own.channel.band == .ghz6 ? siblings : siblings.filter { $0.channel.band != .ghz6 }
+        let mine = own.weakestSecurity
+        let stronger = compared.map(\.weakestSecurity).filter { $0 > mine && $0 >= .wpa }
+        guard !stronger.isEmpty else { return nil }
+        if mine >= .wpa, stronger.count * 2 <= compared.count + 1 { return nil }
+        let counts = Dictionary(grouping: stronger, by: { $0 }).mapValues(\.count)
+        let common = counts.max { ($0.value, $0.key) < ($1.value, $1.key) }!
+        return (common.key, common.value)
     }
 
     /// The single value every element shares, or nil if any is nil or they differ.

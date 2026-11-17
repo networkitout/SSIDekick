@@ -18,17 +18,21 @@ public struct ConnectionState: Sendable, Hashable {
 
 /// Watches one connected session (continuous association with one network name) for signs of an evil twin.
 public struct ConnectionMonitor: Sendable {
+    /// How long the gateway and DNS baselines may still move after their value is first seen in a session.
     public static let settleSeconds: TimeInterval = 10
+    /// How many completed scans make up the newcomer baseline; newcomer checks start with the scan after them.
+    public static let newcomerBaselineScans = 3
 
     /// Increments each time a new session starts.
     public private(set) var sessionID: Int = 0
 
     private var ssid: String?
-    private var startedAt = Date.distantPast
     private var lastBSSID: MACAddress?
     private var gatewayBaseline: MACAddress?
+    private var gatewayFirstSeen: Date?
     private var dnsBaseline: Set<String>?
-    private var newcomerBaseline: Set<MACAddress>?
+    private var dnsFirstSeen: Date?
+    private var newcomerBaseline = NewcomerBaseline()
     private var findings: [Finding] = []
 
     public init() {}
@@ -43,7 +47,6 @@ public struct ConnectionMonitor: Sendable {
         if connection.ssid != ssid {
             endSession()
             ssid = connection.ssid
-            startedAt = now
             sessionID += 1
         }
         let name = connection.ssid
@@ -58,12 +61,19 @@ public struct ConnectionMonitor: Sendable {
         return findings
     }
 
+    /// Ends the current session, if any; the next connection starts a new one even under the same name.
+    public mutating func reset() {
+        endSession()
+    }
+
     private mutating func endSession() {
         ssid = nil
         lastBSSID = nil
         gatewayBaseline = nil
+        gatewayFirstSeen = nil
         dnsBaseline = nil
-        newcomerBaseline = nil
+        dnsFirstSeen = nil
+        newcomerBaseline = NewcomerBaseline()
         findings = []
     }
 
@@ -73,15 +83,16 @@ public struct ConnectionMonitor: Sendable {
         }
     }
 
-    /// Like DNS, the gateway baseline follows the latest value until the session settles, so a router address
-    /// read before DHCP finished never counts as a change.
+    /// The gateway baseline follows the latest value for `settleSeconds` after the first value seen this session,
+    /// so a router address read before DHCP finished never counts as a change.
     private mutating func checkGateway(_ gateway: MACAddress?, name: String, now: Date) {
         guard let gateway else { return }
-        guard let baseline = gatewayBaseline else {
+        guard let baseline = gatewayBaseline, let firstSeen = gatewayFirstSeen else {
             gatewayBaseline = gateway
+            gatewayFirstSeen = now
             return
         }
-        if now <= startedAt + Self.settleSeconds {
+        if now <= firstSeen + Self.settleSeconds {
             gatewayBaseline = gateway
         } else if gateway != baseline {
             raise(Finding(signal: .gatewayChanged, ssid: name, bssid: nil,
@@ -89,14 +100,16 @@ public struct ConnectionMonitor: Sendable {
         }
     }
 
+    /// Like the gateway, the DNS baseline settles `settleSeconds` after the first non-empty set seen this session.
     private mutating func checkDNS(_ servers: [String], name: String, now: Date) {
         let current = Set(servers)
         guard !current.isEmpty else { return }
-        guard let baseline = dnsBaseline else {
+        guard let baseline = dnsBaseline, let firstSeen = dnsFirstSeen else {
             dnsBaseline = current
+            dnsFirstSeen = now
             return
         }
-        if now <= startedAt + Self.settleSeconds {
+        if now <= firstSeen + Self.settleSeconds {
             dnsBaseline = current
         } else if current != baseline {
             raise(Finding(signal: .dnsChanged, ssid: name, bssid: nil,
@@ -104,26 +117,58 @@ public struct ConnectionMonitor: Sendable {
         }
     }
 
+    /// The first `newcomerBaselineScans` scans of a session build the baseline (one scan often misses an access
+    /// point). After that, a same-name address outside the baseline that is louder than the connected one is a
+    /// newcomer, unless it shares a maker prefix with a baseline address and its security is no weaker than the
+    /// weakest baseline security.
     private mutating func checkScan(_ scan: [AccessPoint], connection: ConnectionState) {
         let sameName = scan.filter { $0.ssid == connection.ssid && $0.bssid != nil }
-        guard let baseline = newcomerBaseline else {
-            newcomerBaseline = Set(sameName.compactMap(\.bssid))
+        guard newcomerBaseline.scans >= Self.newcomerBaselineScans else {
+            newcomerBaseline.add(sameName)
             return
         }
         for candidate in sameName {
-            guard let address = candidate.bssid, !baseline.contains(address),
-                  candidate.rssi > connection.rssi else { continue }
+            guard let address = candidate.bssid, !newcomerBaseline.addresses.contains(address),
+                  candidate.rssi > connection.rssi,
+                  !newcomerBaseline.isSameMaker(candidate) else { continue }
             raise(Finding(signal: .louderNewcomer, ssid: connection.ssid, bssid: address,
                           reason: "A new access point with this network name appeared and is louder than the one you are using."))
         }
     }
 
+    /// A move counts only when the destination already scores worth a look or higher on its own findings.
     private mutating func checkMove(to address: MACAddress, name: String, siblingFindings: [Finding]) {
-        let flagged = siblingFindings.contains { $0.bssid == address }
-            || findings.contains { $0.signal == .louderNewcomer && $0.bssid == address }
-        if flagged {
+        let destination = siblingFindings.filter { $0.bssid == address }
+            + findings.filter { $0.signal == .louderNewcomer && $0.bssid == address }
+        if verdict(for: destination) >= .worthALook {
             raise(Finding(signal: .movedToFlagged, ssid: name, bssid: address,
-                          reason: "You moved onto an access point that was already flagged as worth a look."))
+                          reason: "You moved onto an access point already flagged as worth a look or suspect."))
         }
     }
+}
+
+/// The same-name access points seen in a session's first scans.
+private struct NewcomerBaseline: Sendable {
+    var scans = 0
+    var addresses: Set<MACAddress> = []
+    /// Maker prefixes with the locally-administered bit cleared.
+    var ouis: Set<UInt32> = []
+    var weakestSecurity: SecurityMode?
+
+    mutating func add(_ entries: [AccessPoint]) {
+        scans += 1
+        for entry in entries {
+            guard let address = entry.bssid else { continue }
+            addresses.insert(address)
+            ouis.insert(Self.maker(address))
+            weakestSecurity = min(weakestSecurity ?? entry.weakestSecurity, entry.weakestSecurity)
+        }
+    }
+
+    func isSameMaker(_ candidate: AccessPoint) -> Bool {
+        guard let address = candidate.bssid, let weakestSecurity else { return false }
+        return ouis.contains(Self.maker(address)) && candidate.weakestSecurity >= weakestSecurity
+    }
+
+    static func maker(_ address: MACAddress) -> UInt32 { address.oui & ~0x020000 }
 }

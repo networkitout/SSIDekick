@@ -18,8 +18,9 @@ public func demoSources(_ scenario: DemoScenario) -> (wifi: WiFiSource, config: 
     case .clonedAddress:
         wifi = DemoWiFi(connectedTo: Demo.corp[1], scan: Demo.corp + [Demo.corpClone])
     case .newcomer:
-        wifi = DemoWiFi(connectedTo: Demo.home[0], scan: Demo.home, created: created,
-                        lateArrivals: (after: 10, entries: [Demo.homeNewcomer]))
+        // Appears once the session's newcomer baseline (its first three scans) is complete.
+        wifi = DemoWiFi(connectedTo: Demo.home[0], scan: Demo.home,
+                        lateArrivals: (afterScans: ConnectionMonitor.newcomerBaselineScans, entries: [Demo.homeNewcomer]))
     case .gatewayChange:
         wifi = DemoWiFi(connectedTo: Demo.home[0], scan: Demo.home)
     case .locationDenied:
@@ -97,8 +98,8 @@ private enum Demo {
         ap("Home", "00:14:6c:5e:a0:10", rssi: -58, channel: 100),
         ap("Home", "00:14:6c:5e:a0:20", rssi: -74, channel: 11, band: .ghz2_4, width: 20),
     ]
-    /// Same vendor as the real `Home` access points, but new and louder.
-    static let homeNewcomer = ap("Home", "00:14:6c:5e:b7:42", rssi: -38, channel: 104)
+    /// A different maker from the real `Home` access points, new and louder.
+    static let homeNewcomer = ap("Home", "50:c7:bf:5e:b7:42", rssi: -38, channel: 104)
 
     /// What macOS reports without Location permission: no names, no addresses.
     static func redacted(_ entry: AccessPoint) -> AccessPoint {
@@ -118,17 +119,17 @@ private struct DemoWiFiOffError: LocalizedError {
 private final class DemoWiFi: WiFiSource {
     private let link: LinkSnapshot?
     private let entries: [AccessPoint]
-    private let created: Date
-    private let lateArrivals: (after: TimeInterval, entries: [AccessPoint])?
+    /// Extra entries returned by every scan after the first `afterScans`.
+    private let lateArrivals: (afterScans: Int, entries: [AccessPoint])?
+    private var scans = 0
     private let isOff: Bool
 
-    init(connectedTo entry: AccessPoint, scan: [AccessPoint], created: Date = Date(),
-         lateArrivals: (after: TimeInterval, entries: [AccessPoint])? = nil) {
+    init(connectedTo entry: AccessPoint, scan: [AccessPoint],
+         lateArrivals: (afterScans: Int, entries: [AccessPoint])? = nil) {
         link = LinkSnapshot(ssid: entry.ssid, bssid: entry.bssid, rssi: entry.rssi, noise: entry.noise,
                             txRateMbps: 864, channel: entry.channel, generation: entry.generation,
                             security: entry.weakestSecurity, countryCode: entry.countryCode)
         entries = scan
-        self.created = created
         self.lateArrivals = lateArrivals
         isOff = false
     }
@@ -136,7 +137,6 @@ private final class DemoWiFi: WiFiSource {
     init(off: Void) {
         link = nil
         entries = []
-        created = Date()
         lateArrivals = nil
         isOff = true
     }
@@ -147,7 +147,8 @@ private final class DemoWiFi: WiFiSource {
 
     func scan() async throws -> [AccessPoint] {
         if isOff { throw DemoWiFiOffError() }
-        if let lateArrivals, Date().timeIntervalSince(created) >= lateArrivals.after {
+        scans += 1
+        if let lateArrivals, scans > lateArrivals.afterScans {
             return entries + lateArrivals.entries
         }
         return entries

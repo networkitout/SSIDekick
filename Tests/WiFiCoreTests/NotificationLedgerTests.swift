@@ -43,4 +43,27 @@ import Testing
         let b = Finding(signal: .beaconMismatch, ssid: "Home", bssid: address, reason: "beacon")
         #expect(Set(ledger.pending(findings: [a, b], connectedSSID: "Home", sessionID: 1)) == [a, b])
     }
+
+    @Test func changingReasonIsNotNewFinding() {
+        var ledger = NotificationLedger()
+        var returned: [Finding] = []
+        for count in [3, 4, 3, 5] {
+            let f = Finding(signal: .securityMismatch, ssid: "Home", bssid: address,
+                            reason: "Open, while \(count) others named Home use WPA2")
+            returned += ledger.pending(findings: [f], connectedSSID: "Home", sessionID: 1)
+        }
+        #expect(returned.count == 1)
+    }
+
+    @Test func pendingKeepsFirstSeenOrder() {
+        let other = MACAddress("a4:b1:c2:00:00:02")
+        let a = Finding(signal: .vendorMismatch, ssid: "Home", bssid: other, reason: "a")
+        let b = Finding(signal: .gatewayChanged, ssid: "Home", bssid: nil, reason: "b")
+        let c = Finding(signal: .vendorMismatch, ssid: "Home", bssid: address, reason: "c")
+        let d = Finding(signal: .dnsChanged, ssid: "Home", bssid: nil, reason: "d")
+        for _ in 0..<10 {
+            var ledger = NotificationLedger()
+            #expect(ledger.pending(findings: [a, b, c, d], connectedSSID: "Home", sessionID: 1) == [a, b, c, d])
+        }
+    }
 }

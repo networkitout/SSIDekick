@@ -285,18 +285,35 @@ struct EngineTests {
         #expect(engine.snapshot.findings.contains { $0.signal == .clonedAddress })
     }
 
-    @Test func louderNewcomerNeedsTwoCompletedScans() async {
+    @Test func louderNewcomerNeedsFourCompletedScans() async {
         let wifi = FakeWiFi()
         let base = [ap("Corp", "00:0b:86:00:00:01"), ap("Corp", "00:0b:86:00:00:02")]
-        wifi.scans = [.success(base), .success(base + [ap("Corp", "00:0b:86:00:00:09", rssi: -40)])]
+        wifi.scans = [.success(base), .success(base), .success(base),
+                      .success(base + [ap("Corp", "00:14:6c:00:00:09", rssi: -40)])]
         let engine = makeEngine(wifi: wifi)
         engine.refreshLink()
-        await engine.scanNow()
-        engine.refreshLink()   // must not hand the same scan to the monitor again
-        #expect(engine.snapshot.connectedVerdict == .clear)
+        for _ in 0..<3 {
+            await engine.scanNow()
+            engine.refreshLink()   // must not hand the same scan to the monitor again
+            #expect(engine.snapshot.connectedVerdict == .clear)
+        }
         await engine.scanNow()
         #expect(engine.snapshot.findings.map(\.signal) == [.louderNewcomer])
         #expect(engine.snapshot.connectedVerdict == .worthALook)
+    }
+
+    @Test func newcomerDemoTurnsAmberAfterBaseline() async {
+        let recorder = Recorder()
+        let engine = makeDemoEngine(.newcomer, recorder: recorder)
+        engine.refreshLink()
+        for _ in 0..<3 {
+            await engine.scanNow()
+            #expect(engine.snapshot.connectedVerdict == .clear)
+        }
+        await engine.scanNow()
+        #expect(engine.snapshot.connectedVerdict == .worthALook)
+        #expect(engine.snapshot.findings.contains { $0.signal == .louderNewcomer })
+        #expect(recorder.calls.count == 1)
     }
 
     @Test func networkSwitchDoesNotCarryGatewayBaseline() async {

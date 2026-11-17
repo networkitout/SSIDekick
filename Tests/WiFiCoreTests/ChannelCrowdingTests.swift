@@ -24,6 +24,14 @@ import Testing
         #expect(occupiedChannels(Channel(number: 233, band: .ghz6, widthMHz: 160)) == [225, 229, 233])
         // 6 GHz: 320 is treated as 160.
         #expect(occupiedChannels(Channel(number: 37, band: .ghz6, widthMHz: 320)) == [33, 37, 41, 45, 49, 53, 57, 61])
+        // Top of the third 5 GHz segment at 80 MHz.
+        #expect(occupiedChannels(Channel(number: 177, band: .ghz5, widthMHz: 80)) == [165, 169, 173, 177])
+    }
+
+    @Test func outOfRange2_4GHzChannelIsItself() {
+        for number in [0, 19, 200, -7] {
+            #expect(occupiedChannels(Channel(number: number, band: .ghz2_4, widthMHz: 20)) == [number])
+        }
     }
 
     @Test func loadsCountOverlap() {
