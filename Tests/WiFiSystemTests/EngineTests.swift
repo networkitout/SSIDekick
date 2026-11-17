@@ -115,6 +115,35 @@ struct EngineTests {
         #expect(recorder.calls.first?.contains { $0.signal == .vendorMismatch } == true)
     }
 
+    /// The menu bar icon and warning line the demo scenarios are expected to produce.
+    @Test func demoScenariosDriveTheMenuStatus() async {
+        let recorder = Recorder()
+        let plane = makeDemoEngine(.planeTwin, recorder: recorder)
+        plane.refreshLink()
+        await plane.scanNow()
+        #expect(statusGlyph(for: plane.snapshot) == StatusGlyph(symbol: "wifi", tint: .orange))
+        #expect(twinWarning(for: plane.snapshot) == "⚠ 1 worth a look")
+
+        let office = makeDemoEngine(.office, recorder: recorder)
+        office.refreshLink()
+        await office.refreshProbes()
+        await office.scanNow()
+        #expect(statusGlyph(for: office.snapshot) == StatusGlyph(symbol: "wifi", tint: .normal))
+        #expect(twinWarning(for: office.snapshot) == nil)
+
+        let off = makeDemoEngine(.wifiOff, recorder: recorder)
+        off.refreshLink()
+        await off.refreshProbes()
+        #expect(statusGlyph(for: off.snapshot).symbol == "wifi.slash")
+
+        let denied = makeDemoEngine(.locationDenied, recorder: recorder)
+        denied.refreshLink()
+        await denied.scanNow()
+        #expect(!denied.snapshot.locationAuthorized)
+        #expect(denied.snapshot.link != nil)
+        #expect(twinWarning(for: denied.snapshot) == nil)
+    }
+
     @Test func officeStaysClear() async {
         let recorder = Recorder()
         let engine = makeDemoEngine(.office, recorder: recorder)

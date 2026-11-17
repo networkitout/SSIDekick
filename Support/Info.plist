@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>local.wifiutil.WiFiUtil</string>
+	<key>CFBundleName</key>
+	<string>WiFiUtil</string>
+	<key>CFBundleExecutable</key>
+	<string>WiFiUtil</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>WiFiUtil needs Location Services because macOS only reveals Wi-Fi network names and access point addresses to apps that have it.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>WiFiUtil needs Location Services because macOS only reveals Wi-Fi network names and access point addresses to apps that have it.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>captive.apple.com</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>
