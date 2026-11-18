@@ -96,7 +96,7 @@ private func rank(_ s: DNSAnswersState) -> Int {
     case .rewritten: 3
     case .filteredByYourServer: 2
     case .filtered: 1
-    default: 0
+    case .asExpected, .noAnswer, .notChecked, .off: 0
     }
 }
 

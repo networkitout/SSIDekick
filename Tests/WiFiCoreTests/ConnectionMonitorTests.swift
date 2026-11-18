@@ -321,6 +321,14 @@ struct ConnectionMonitorTests {
         #expect(out.isEmpty)
     }
 
+    @Test func resetClearsTamperedFinding() {
+        var m = ConnectionMonitor()
+        _ = m.update(connection: conn(answers: Self.tampered), scan: nil, siblingFindings: [], now: t0)
+        m.reset()
+        let out = m.update(connection: conn(answers: .asExpected), scan: nil, siblingFindings: [], now: t0 + 60)
+        #expect(out.isEmpty)
+    }
+
     @Test func otherAnswerStatesRaiseNothing() {
         let states: [DNSAnswersState] = [.notChecked, .off, .noAnswer, .asExpected, .filtered,
                                          .filteredByYourServer(name: "x.test", address: "0.0.0.0"),

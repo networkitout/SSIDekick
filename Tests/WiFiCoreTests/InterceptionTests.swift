@@ -80,6 +80,22 @@ import WiFiCore
         }
     }
 
+    @Test func addressBoundaries() {
+        #expect(!isPrivateAddress("172.15.255.255"))
+        #expect(isPrivateAddress("fc00::1"))
+        #expect(!isPrivateAddress("fec0::1"))
+        #expect(isPrivateAddress("127.255.255.255"))
+        #expect(!isBlockAnswer("146.112.60.255"))
+        #expect(isBlockAnswer("146.112.61.255"))
+        #expect(isBlockAnswer("127.255.255.255"))
+        #expect(!isBlockAnswer("172.15.255.255"))
+    }
+
+    @Test func handSetServerWithBlockAnswerIsFiltered() {
+        #expect(classify(google: .answered(["0.0.0.0"]), handSet: true) == .filtered)
+        #expect(classify(google: .answered(["146.112.61.106"]), handSet: true) == .filtered)
+    }
+
     @Test func blockAnswers() {
         for ip in ["0.0.0.0", "127.0.0.53", "146.112.61.110"] { #expect(isBlockAnswer(ip), "\(ip)") }
         for ip in ["146.112.62.1", "192.168.1.2"] { #expect(!isBlockAnswer(ip), "\(ip)") }
