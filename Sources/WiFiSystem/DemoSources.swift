@@ -217,6 +217,7 @@ private final class DemoProber: Prober {
         return lookups[name.hasSuffix(".example.com") ? "madeUp" : name] ?? .failed
     }
     func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) { online ? (.online, 41.7) : (.offline, nil) }
+    func wifiCaptiveCheck() async -> InternetStatus { online ? .online : .offline }
     /// An address from the documentation range (RFC 5737).
     func publicIP() async -> String? { online ? "203.0.113.24" : nil }
     var https: HTTPSState = .direct

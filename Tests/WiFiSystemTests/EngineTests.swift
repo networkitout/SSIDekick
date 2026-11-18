@@ -112,6 +112,15 @@ private final class FakeProber: Prober {
         internetCount += 1
         return (internetStatus, internetStatus == .online ? 30 : nil)
     }
+    /// The captive check over the Wi-Fi interface, which gates the interception checks.
+    var wifiCaptiveStatus: InternetStatus = .online
+    private let wifiCaptiveLock = NSLock()
+    private var wifiCaptiveCalls = 0
+    var wifiCaptiveCount: Int { wifiCaptiveLock.withLock { wifiCaptiveCalls } }
+    func wifiCaptiveCheck() async -> InternetStatus {
+        wifiCaptiveLock.withLock { wifiCaptiveCalls += 1 }
+        return wifiCaptiveStatus
+    }
     func publicIP() async -> String? { publicIPCount += 1; return "203.0.113.5" }
     var httpsResult: HTTPSState = .direct
     var httpsCount = 0

@@ -72,6 +72,9 @@ public protocol Prober: AnyObject {
     /// Looks up the A records of `name` on the DNS server `server`.
     func dnsLookup(name: String, server: String) async -> DNSLookup
     func internetCheck() async -> (status: InternetStatus, latencyMs: Double?)
+    /// The same captive check as `internetCheck`, but sent over the Wi-Fi interface whatever the default route is.
+    /// The DNS answers and HTTPS checks run only when it is `.online`.
+    func wifiCaptiveCheck() async -> InternetStatus
     func publicIP() async -> String?
     /// How the TLS certificate of InterceptionCheck.httpsURL is trusted: `.direct`, `.decryptable`, `.rejected`
     /// or `.noAnswer`.
