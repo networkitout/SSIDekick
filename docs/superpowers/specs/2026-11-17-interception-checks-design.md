@@ -120,8 +120,8 @@ The owner does the live check: trusting a local inspection proxy's root (mitmpro
 
 ### When the checks run
 
-- Only while Wi-Fi is connected and the latest captive check says online.
-- Once per session as soon as both hold, then every 300 s, and again when the Wi-Fi interface's DNS servers change **(builder's call on 300 s)**.
+- Only while Wi-Fi is connected and a captive check sent over the Wi-Fi interface itself says online. The Internet row's own check follows the default route, which may not be Wi-Fi (Ethernet, a tethered phone), so it cannot gate checks that ask the Wi-Fi network's DNS server. If the Wi-Fi check cannot run, both rows read `not checked` **(controller's ruling after the final review)**.
+- Once per session as soon as both hold, then every 300 s, again when the Wi-Fi interface's DNS servers change, and again after a move to a different access point, at most once every 30 s **(builder's call on 300 s; roam recheck is the controller's ruling after the final review)**.
 - Part of the probe round, so results are committed only if the session and network configuration are unchanged when they come back. A dropped result is retried on the next round.
 - The three DNS queries run in parallel; the HTTPS check runs alongside them **(builder's call)**.
 - Behind a captive portal or offline, both rows read `not checked`.
