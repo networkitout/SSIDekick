@@ -78,7 +78,7 @@ Per-query classification (owner chose options **(b) + (d)**: filters stay amber,
 - Made-up name answered with any A record: **rewritten**.
 - No reply, a malformed reply or a send failure: unknown.
 
-Overall state = worst of tampered > filtered / rewritten > as expected; unknown only if every query is unknown. When both filtered and rewritten apply, show rewritten. Answers whose transaction ID or question does not match are ignored. The address shown is the first unexpected A answer.
+Overall state = worst of tampered > filtered / rewritten > as expected; unknown only if every query is unknown. When both filtered and rewritten apply, show rewritten. Answers whose transaction ID or question does not match are ignored. The address shown is the first unexpected A answer that is not a block answer.
 
 | State | Row text | Level |
 |---|---|---|

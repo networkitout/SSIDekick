@@ -345,3 +345,5 @@ Engine behaviour, inside `probeOnce` after `internetCheck`:
 - Set this Mac's Wi-Fi DNS by hand to a private address (or a Pi-hole). Check that `scutil` shows `Setup:/…/DNS`, and that a blocked name reads `filtered by your DNS server`.
 - Trust a local inspection proxy's root (mitmproxy, for example) and route through it. HTTPS must show amber `can be decrypted · root "mitmproxy"`. Remove the root afterwards.
 - Behind a captive portal, both rows read `not checked`.
+- On a normal network, a made-up `*.example.com` name is not answered (otherwise every network would show amber rewritten).
+- With the Mac on Ethernet and Wi-Fi joined to a captive guest network, both rows read `not checked`.
