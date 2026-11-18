@@ -211,11 +211,15 @@ struct MenuContentView: View {
     private func row(_ title: String, _ value: String, level: QualityLevel, tintValue: Bool = false) -> some View {
         HStack(spacing: 6) {
             Circle().fill(levelColor(level)).frame(width: 8, height: 8).accessibilityHidden(true)
-            Text(title).fixedSize()
+            // A long title (an IPv6 DNS server, say) truncates in the middle; the value keeps its room.
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer(minLength: 8)
             Text(value)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .layoutPriority(1)
                 .foregroundStyle(tintValue ? levelColor(level) : .primary)
         }
         .accessibilityElement(children: .ignore)
