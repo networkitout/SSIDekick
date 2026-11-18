@@ -149,6 +149,8 @@ private final class Clock {
 
 /// The Engine's injected sleep. Closed, sleepers wait; open, they return at once. Either way the clock moves on by
 /// the time slept, so debounce and spacing are checked without wall-clock waits.
+/// Main-actor isolated, so concurrent sleepers (such as the Engine's parallel DNS lookups held through
+/// `FakeProber.duringLookup`) hop onto the main actor and touch `waiters`, `sleeps` and the clock one at a time.
 @MainActor
 private final class Gate {
     let clock: Clock
@@ -963,15 +965,229 @@ private let googleTampered: DNSAnswersState =
 @MainActor
 extension EngineTests {
     @Test func interceptionNotCheckedUnlessOnline() async {
+        for status in [InternetStatus.captivePortal, .offline] {
+            let prober = FakeProber()
+            prober.internetStatus = status
+            prober.wifiCaptiveStatus = status
+            let engine = makeEngine(prober: prober)
+            engine.refreshLink()
+            await engine.refreshProbes()
+            #expect(engine.snapshot.connectivity.dnsAnswers == .notChecked)
+            #expect(engine.snapshot.connectivity.https == .notChecked)
+            #expect(prober.lookupCount == 0)
+            #expect(prober.httpsCount == 0)
+        }
+    }
+
+    /// Ethernet primary and online, Wi-Fi on a captive guest network: the default-route check says online, the
+    /// Wi-Fi captive check does not, and nothing is sent to the portal's DNS server.
+    @Test func interceptionGatedOnTheWiFiCaptiveCheck() async {
+        let prober = FakeProber()
+        prober.internetStatus = .online
+        prober.wifiCaptiveStatus = .captivePortal
+        prober.lookups["dns.google"] = tamperedGoogle
+        let recorder = Recorder()
+        let engine = makeEngine(prober: prober)
+        engine.onNewFindings = { recorder.calls.append($0) }
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.internet == .online)
+        #expect(engine.snapshot.connectivity.dnsAnswers == .notChecked)
+        #expect(engine.snapshot.connectivity.https == .notChecked)
+        #expect(prober.wifiCaptiveCount == 1)
+        #expect(prober.lookupCount == 0)
+        #expect(prober.httpsCount == 0)
+        #expect(engine.snapshot.findings.isEmpty)
+        #expect(recorder.calls.isEmpty)
+    }
+
+    /// The reverse: the default route is captive (or offline) but Wi-Fi itself is online, so the checks run.
+    @Test func defaultRouteStatusDoesNotGateTheChecks() async {
         let prober = FakeProber()
         prober.internetStatus = .captivePortal
+        prober.wifiCaptiveStatus = .online
         let engine = makeEngine(prober: prober)
         engine.refreshLink()
         await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.internet == .captivePortal)
+        #expect(engine.snapshot.connectivity.dnsAnswers == .asExpected)
+        #expect(engine.snapshot.connectivity.https == .direct)
+        #expect(prober.lookupCount == 3)
+    }
+
+    @Test func settingOffSendsNoWiFiCaptiveCheck() async {
+        let prober = FakeProber()
+        let engine = makeEngine(prober: prober, settings: EngineSettings(interceptionChecksEnabled: false))
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(prober.wifiCaptiveCount == 0)
+        #expect(prober.internetCount == 1)
+    }
+
+    /// Every round asks the Wi-Fi captive check, so a network that turns captive goes grey within one round.
+    @Test func wifiCaptiveCheckRunsEveryRound() async {
+        let prober = FakeProber()
+        prober.lookups["dns.google"] = tamperedGoogle
+        let clock = Clock()
+        let engine = makeEngine(prober: prober, clock: clock)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.dnsAnswers == googleTampered)
+        clock.date = t0 + 10
+        prober.wifiCaptiveStatus = .captivePortal
+        await engine.refreshProbes()
+        #expect(prober.wifiCaptiveCount == 2)
         #expect(engine.snapshot.connectivity.dnsAnswers == .notChecked)
         #expect(engine.snapshot.connectivity.https == .notChecked)
+    }
+
+    @Test func onlineCaptiveOnlineChecksAgainAtOnce() async {
+        let prober = FakeProber()
+        let clock = Clock()
+        let engine = makeEngine(prober: prober, clock: clock)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(prober.lookupCount == 3)
+        clock.date = t0 + 10
+        prober.wifiCaptiveStatus = .captivePortal
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.dnsAnswers == .notChecked)
+        #expect(engine.snapshot.connectivity.https == .notChecked)
+        #expect(prober.lookupCount == 3)
+        clock.date = t0 + 20   // well inside the interval: the captive round cleared the last check
+        prober.wifiCaptiveStatus = .online
+        await engine.refreshProbes()
+        #expect(prober.lookupCount == 6)
+        #expect(prober.httpsCount == 2)
+        #expect(engine.snapshot.connectivity.dnsAnswers == .asExpected)
+        #expect(engine.snapshot.connectivity.https == .direct)
+    }
+
+    /// A round dropped because the configuration changed under it is retried, and the retry commits the checks.
+    @Test func configChangedRoundIsRetriedAndCommitted() async {
+        let config = FakeConfig()
+        let neighbors = FakeNeighbors()
+        var changed = false
+        neighbors.duringLookup = {
+            guard !changed else { return }
+            changed = true
+            config.config.gatewayIP = "192.168.1.254"
+        }
+        let prober = FakeProber()
+        let engine = makeEngine(config: config, neighbors: neighbors, prober: prober)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(neighbors.lookups == 2)
+        // Same DNS servers and inside the interval: only a dropped first round makes the retry check again.
+        #expect(prober.lookupCount == 6)
+        #expect(prober.httpsCount == 2)
+        #expect(engine.snapshot.connectivity.gatewayIP == "192.168.1.254")
+        #expect(engine.snapshot.connectivity.dnsAnswers == .asExpected)
+        #expect(engine.snapshot.connectivity.https == .direct)
+        await engine.refreshProbes()
+        #expect(prober.lookupCount == 6)   // committed: the next round is not due
+    }
+
+    @Test func noDNSServerStillChecksHTTPS() async {
+        let config = FakeConfig()
+        config.config.dnsServers = []
+        let prober = FakeProber()
+        let engine = makeEngine(config: config, prober: prober)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.dnsAnswers == .notChecked)
+        #expect(engine.snapshot.connectivity.https == .direct)
+        #expect(prober.httpsCount == 1)
         #expect(prober.lookupCount == 0)
-        #expect(prober.httpsCount == 0)
+    }
+
+    /// A roam to another access point of the same network makes the checks due once the last one is 30 s old.
+    @Test func roamMakesTheChecksDue() async {
+        let wifi = FakeWiFi()
+        let prober = FakeProber()
+        let clock = Clock()
+        let gate = Gate(clock: clock)   // closed: the scan a roam asks for stays pending
+        let recorder = Recorder()
+        let engine = makeEngine(wifi: wifi, prober: prober, settings: EngineSettings(scanInterval: nil), clock: clock,
+                                gate: gate)
+        engine.onNewFindings = { recorder.calls.append($0) }
+        engine.start()
+        defer { engine.stop() }
+        await settleProbes(engine)
+        #expect(prober.lookupCount == 3)
+        #expect(engine.snapshot.connectivity.dnsAnswers == .asExpected)
+
+        prober.lookups["dns.google"] = tamperedGoogle
+        clock.date = t0 + 10
+        wifi.link = makeLink("Corp", "00:0b:86:00:00:02")   // same name, same DNS servers
+        wifi.emit(.bssidChanged)
+        await drainEvents(engine, wifi: wifi)
+        await settleProbes(engine)
+        #expect(engine.snapshot.link?.bssid == mac("00:0b:86:00:00:02"))
+        #expect(prober.lookupCount == 3)   // the last check is only 10 s old
+        #expect(engine.snapshot.connectivity.dnsAnswers == .asExpected)
+
+        clock.date = t0 + 31
+        await settleProbes(engine)
+        #expect(prober.lookupCount == 6)
+        #expect(engine.snapshot.connectivity.dnsAnswers == googleTampered)
+        #expect(recorder.calls.flatMap { $0 }.filter { $0.signal == .dnsTampered }.count == 1)
+
+        clock.date = t0 + 70
+        await settleProbes(engine)
+        #expect(prober.lookupCount == 6)   // checked on this access point: back to the normal interval
+    }
+
+    @Test func noRoamNoEarlyCheck() async {
+        let prober = FakeProber()
+        let clock = Clock()
+        let engine = makeEngine(prober: prober, clock: clock)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        clock.date = t0 + 31
+        await engine.refreshProbes()
+        #expect(prober.lookupCount == 3)
+    }
+
+    /// With the setting off, a session reset leaves the rows reading "off", and a disconnected tick does not
+    /// end the session again every time.
+    @Test func sessionResetWithSettingOffReadsOff() async {
+        let wifi = FakeWiFi()
+        let engine = makeEngine(wifi: wifi, settings: EngineSettings(interceptionChecksEnabled: false))
+        engine.refreshLink()
+        #expect(engine.snapshot.connectivity.dnsAnswers == .off)
+        #expect(engine.snapshot.connectivity.https == .off)
+        await engine.refreshProbes()
+        wifi.link = makeLink("Home", "00:14:6c:00:00:01")
+        engine.refreshLink()
+        #expect(engine.snapshot.connectivity.dnsAnswers == .off)
+        #expect(engine.snapshot.connectivity.https == .off)
+        engine.noteWake()
+        #expect(engine.snapshot.connectivity.dnsAnswers == .off)
+        #expect(engine.snapshot.connectivity.https == .off)
+
+        wifi.wifiState = .notConnected
+        wifi.link = nil
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.dnsAnswers == .off)
+        let epoch = engine.epoch
+        await engine.refreshProbes()
+        await engine.refreshProbes()
+        #expect(engine.epoch == epoch)
+    }
+
+    @Test func disconnectedTicksDoNotBumpTheEpoch() async {
+        let wifi = FakeWiFi()
+        wifi.wifiState = .notConnected
+        wifi.link = nil
+        let engine = makeEngine(wifi: wifi)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        let epoch = engine.epoch
+        await engine.refreshProbes()
+        #expect(engine.epoch == epoch)
+        #expect(engine.snapshot.connectivity.dnsAnswers == .notChecked)
     }
 
     @Test func firstInterceptionCheck() async {

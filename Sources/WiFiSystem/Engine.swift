@@ -78,6 +78,11 @@ public final class Engine {
     @ObservationIgnored private var lastInterceptionCheck: Date?
     /// The DNS servers the last committed interception check ran against.
     @ObservationIgnored private var interceptionCheckServers: [String] = []
+    /// The access point the last committed interception check ran on; nil when its address was not known.
+    @ObservationIgnored private var interceptionCheckBSSID: MACAddress?
+    /// After a roam to another access point of the same network, the checks are due again once the last one is
+    /// this old.
+    private static let roamRecheckAge: TimeInterval = 30
     @ObservationIgnored private let tasks = TaskBag()
     @ObservationIgnored private let linkNap = Nap()
     @ObservationIgnored private let probeNap = Nap()
@@ -97,6 +102,7 @@ public final class Engine {
         self.settings = settings
         self.now = now
         self.sleep = sleep
+        snapshot.connectivity = emptyConnectivity
     }
 
     // MARK: Lifecycle
@@ -130,6 +136,8 @@ public final class Engine {
     var armedScanTask: Task<Void, Never>? { tasks.task("scanRequest") }
     /// Test hook: a probe round is running.
     var isProbing: Bool { probing }
+    /// Test hook: the connection epoch, which changes whenever a session ends or starts.
+    var epoch: Int { connectionEpoch }
 
     /// Ends the current session after the Mac wakes, so a network joined meanwhile starts with fresh baselines.
     public func noteWake() {
@@ -176,12 +184,29 @@ public final class Engine {
         probesStale = true
     }
 
+    /// Connectivity with nothing measured yet. The interception rows read "off" while the setting is off, else
+    /// "not checked".
+    private var emptyConnectivity: ConnectivitySnapshot {
+        var empty = ConnectivitySnapshot()
+        if !settings.interceptionChecksEnabled {
+            empty.dnsAnswers = .off
+            empty.https = .off
+        }
+        return empty
+    }
+
     /// Clears the measured connectivity, the loss window and the interception check schedule.
     private func resetConnectivity() {
-        snapshot.connectivity = ConnectivitySnapshot()
+        snapshot.connectivity = emptyConnectivity
         lossWindow = LossWindow()
-        lastInterceptionCheck = nil
+        clearInterceptionSchedule()
         interceptionCheckServers = []
+    }
+
+    /// Makes the interception checks due at the next round.
+    private func clearInterceptionSchedule() {
+        lastInterceptionCheck = nil
+        interceptionCheckBSSID = nil
     }
 
     /// Off shows both rows as off at once. On shows them as not checked and makes the checks due, then cuts the
@@ -190,7 +215,7 @@ public final class Engine {
         if settings.interceptionChecksEnabled {
             snapshot.connectivity.dnsAnswers = .notChecked
             snapshot.connectivity.https = .notChecked
-            lastInterceptionCheck = nil
+            clearInterceptionSchedule()
             if probing { probeRequested = true }
             probeNap.wake()
         } else {
@@ -301,7 +326,7 @@ public final class Engine {
     /// Nothing is probed unless Wi-Fi is connected; otherwise the connectivity values are cleared.
     public func refreshProbes() async {
         guard wifi.state() == .connected else {
-            if snapshot.connectivity != ConnectivitySnapshot() {
+            if snapshot.connectivity != emptyConnectivity {
                 connectionEpoch += 1   // drops any probe still in flight
                 resetConnectivity()
             }
@@ -330,25 +355,31 @@ public final class Engine {
     private enum InterceptionOutcome {
         /// The setting was off when the round started.
         case off
-        /// The captive check was not online: nothing was sent and both rows read "not checked".
+        /// The captive check over Wi-Fi was not online: nothing else was sent and both rows read "not checked".
         case notOnline
-        /// The last committed check is recent and used the same DNS servers; the rows keep their values.
+        /// The last committed check is recent and used the same DNS servers and access point; the rows keep their
+        /// values.
         case notDue
         case checked(dns: DNSAnswersState, https: HTTPSState)
     }
 
-    /// Due when no check has been committed this session, the last one is `InterceptionCheck.interval` old, or the
-    /// DNS servers changed since it ran.
-    private func interceptionCheckDue(servers: [String]) -> Bool {
+    /// Due when no check has been committed this session, the last one is `InterceptionCheck.interval` old, the
+    /// DNS servers changed since it ran, or Wi-Fi roamed to another access point (`bssid`, when known) and the last
+    /// check is `roamRecheckAge` old.
+    private func interceptionCheckDue(servers: [String], bssid: MACAddress?) -> Bool {
         guard let lastInterceptionCheck else { return true }
-        return now().timeIntervalSince(lastInterceptionCheck) >= InterceptionCheck.interval
-            || servers != interceptionCheckServers
+        let age = now().timeIntervalSince(lastInterceptionCheck)
+        if age >= InterceptionCheck.interval || servers != interceptionCheckServers { return true }
+        if let bssid, bssid != interceptionCheckBSSID, age >= Self.roamRecheckAge { return true }
+        return false
     }
 
-    private func interceptionOutcome(_ current: NetworkConfig, internet: InternetStatus) async -> InterceptionOutcome {
-        guard settings.interceptionChecksEnabled else { return .off }
-        guard internet == .online else { return .notOnline }
-        guard interceptionCheckDue(servers: current.dnsServers) else { return .notDue }
+    /// `wifiCaptive`: the round's captive check over Wi-Fi, nil when the setting was off at the start of the round.
+    private func interceptionOutcome(_ current: NetworkConfig, wifiCaptive: InternetStatus?,
+                                     bssid: MACAddress?) async -> InterceptionOutcome {
+        guard settings.interceptionChecksEnabled, let wifiCaptive else { return .off }
+        guard wifiCaptive == .online else { return .notOnline }
+        guard interceptionCheckDue(servers: current.dnsServers, bssid: bssid) else { return .notDue }
         let prober = self.prober
         async let https = prober.httpsCheck()
         guard let server = current.dnsServers.first else { return .checked(dns: .notChecked, https: await https) }
@@ -368,7 +399,7 @@ public final class Engine {
     }
 
     /// Commits a round's interception outcome, reading the setting as it is now: it may have changed mid-round.
-    private func commitInterception(_ outcome: InterceptionOutcome, servers: [String]) {
+    private func commitInterception(_ outcome: InterceptionOutcome, servers: [String], bssid: MACAddress?) {
         guard settings.interceptionChecksEnabled else {
             snapshot.connectivity.dnsAnswers = .off
             snapshot.connectivity.https = .off
@@ -380,12 +411,13 @@ public final class Engine {
         case .notOnline:
             snapshot.connectivity.dnsAnswers = .notChecked
             snapshot.connectivity.https = .notChecked
-            lastInterceptionCheck = nil   // check again as soon as the captive check is online
+            clearInterceptionSchedule()   // check again as soon as the captive check is online
         case .checked(let dns, let https):
             snapshot.connectivity.dnsAnswers = dns
             snapshot.connectivity.https = https
             lastInterceptionCheck = now()
             interceptionCheckServers = servers
+            interceptionCheckBSSID = bssid
         }
     }
 
@@ -403,8 +435,15 @@ public final class Engine {
         if let server = current.dnsServers.first {
             dnsResult = await prober.dnsLatency(server: server)
         }
+        // The default-route check feeds the Internet row. The interception checks are gated on the same check sent
+        // over Wi-Fi, run alongside it every round while the setting is on, so a Wi-Fi network that turns captive
+        // reads "not checked" within one round whatever the default route says.
+        let bssid = snapshot.link?.bssid
+        let prober = self.prober
+        let checksOn = settings.interceptionChecksEnabled
+        async let wifiCaptive: InternetStatus? = checksOn ? prober.wifiCaptiveCheck() : nil
         let internet = await prober.internetCheck()
-        let interception = await interceptionOutcome(current, internet: internet.status)
+        let interception = await interceptionOutcome(current, wifiCaptive: await wifiCaptive, bssid: bssid)
 
         // Results measured against a previous network or an outdated configuration are discarded whole,
         // loss sample included.
@@ -432,7 +471,7 @@ public final class Engine {
         snapshot.connectivity.internetLatencyMs = internet.latencyMs
         snapshot.connectivity.ipv4 = current.ipv4
         snapshot.connectivity.ipv6 = current.ipv6
-        commitInterception(interception, servers: current.dnsServers)
+        commitInterception(interception, servers: current.dnsServers, bssid: bssid)
         recompute(completedScan: nil)
         return .committed
     }
