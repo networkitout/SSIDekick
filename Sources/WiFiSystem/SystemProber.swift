@@ -1,9 +1,9 @@
 import Foundation
 import WiFiCore
 
-/// The real network probes: ICMP ping, a UDP DNS query, the captive check and the public-IP lookup.
-/// The ping and DNS sockets are bound to the Wi-Fi interface. The two HTTP probes follow the system's default route
-/// (v1 ruling).
+/// The real network probes: ICMP ping, UDP DNS queries, the captive check, the public-IP lookup and the HTTPS trust
+/// check. The ping and DNS sockets are bound to the Wi-Fi interface. The HTTP and HTTPS probes follow the system's
+/// default route (v1 ruling).
 public final class SystemProber: Prober {
     private let http = HTTPProbes()
     private let interfaceName: String
@@ -30,5 +30,9 @@ public final class SystemProber: Prober {
 
     public func publicIP() async -> String? {
         await http.publicIP()
+    }
+
+    public func httpsCheck() async -> HTTPSState {
+        await WiFiSystem.httpsCheck(url: URL(string: InterceptionCheck.httpsURL)!, timeout: 5)
     }
 }

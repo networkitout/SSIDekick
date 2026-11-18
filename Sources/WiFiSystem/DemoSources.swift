@@ -206,6 +206,7 @@ private final class DemoProber: Prober {
     func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) { online ? (.online, 41.7) : (.offline, nil) }
     /// An address from the documentation range (RFC 5737).
     func publicIP() async -> String? { online ? "203.0.113.24" : nil }
+    func httpsCheck() async -> HTTPSState { .direct }
 }
 
 private final class DemoLocation: LocationAuthorizing {

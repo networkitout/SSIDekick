@@ -73,6 +73,9 @@ public protocol Prober: AnyObject {
     func dnsLookup(name: String, server: String) async -> DNSLookup
     func internetCheck() async -> (status: InternetStatus, latencyMs: Double?)
     func publicIP() async -> String?
+    /// How the TLS certificate of InterceptionCheck.httpsURL is trusted: `.direct`, `.decryptable`, `.rejected`
+    /// or `.noAnswer`.
+    func httpsCheck() async -> HTTPSState
 }
 
 /// Location Services authorisation, which macOS requires before it reveals network names and addresses.

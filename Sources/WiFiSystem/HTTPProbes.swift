@@ -18,6 +18,19 @@ func validatedIP(_ text: String) -> String? {
     return nil
 }
 
+/// An ephemeral session configuration with no cache and no cookies, timing out after `timeout` seconds.
+func lockedDownConfiguration(timeout: TimeInterval) -> URLSessionConfiguration {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+    configuration.urlCache = nil
+    configuration.httpCookieStorage = nil
+    configuration.httpShouldSetCookies = false
+    configuration.httpCookieAcceptPolicy = .never
+    configuration.timeoutIntervalForRequest = timeout
+    configuration.timeoutIntervalForResource = timeout
+    return configuration
+}
+
 /// The two HTTP probes, over an ephemeral session with no cache or cookies that never follows redirects.
 final class HTTPProbes {
     static let captiveURL = URL(string: "http://captive.apple.com/hotspot-detect.html")!
@@ -27,15 +40,8 @@ final class HTTPProbes {
     private let session: URLSession
 
     init() {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        configuration.urlCache = nil
-        configuration.httpCookieStorage = nil
-        configuration.httpShouldSetCookies = false
-        configuration.httpCookieAcceptPolicy = .never
-        configuration.timeoutIntervalForRequest = Self.timeout
-        configuration.timeoutIntervalForResource = Self.timeout
-        session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+        session = URLSession(configuration: lockedDownConfiguration(timeout: Self.timeout), delegate: NoRedirects(),
+                             delegateQueue: nil)
     }
 
     deinit {

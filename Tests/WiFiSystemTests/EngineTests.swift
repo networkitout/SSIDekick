@@ -103,6 +103,9 @@ private final class FakeProber: Prober {
     }
     func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) { internetCount += 1; return (.online, 30) }
     func publicIP() async -> String? { publicIPCount += 1; return "203.0.113.5" }
+    var httpsResult: HTTPSState = .direct
+    var httpsCount = 0
+    func httpsCheck() async -> HTTPSState { httpsCount += 1; return httpsResult }
 }
 
 private final class FakeLocation: LocationAuthorizing {
