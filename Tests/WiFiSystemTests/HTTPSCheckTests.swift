@@ -29,4 +29,20 @@ import WiFiCore
         let state = await httpsCheck(url: URL(string: "https://127.0.0.1:1/")!, timeout: 2)
         #expect(state == .noAnswer)
     }
+    @Test func chainAgainstAnchors() {
+        let root = Data([1, 2, 3])
+        let other = Data([4, 5, 6])
+        #expect(classifyChain(trustPassed: true, rootData: root, rootName: "R", anchors: [root, other]) == .direct)
+        #expect(classifyChain(trustPassed: true, rootData: root, rootName: "R", anchors: [other])
+            == .decryptable(root: "R"))
+        #expect(classifyChain(trustPassed: false, rootData: root, rootName: "R", anchors: [root]) == .rejected)
+        #expect(classifyChain(trustPassed: true, rootData: nil, rootName: nil, anchors: [root]) == .noAnswer)
+    }
+
+    /// An unreadable root store says nothing about the chain: never "can be decrypted".
+    @Test func emptyAnchorSetIsNoAnswer() {
+        let root = Data([1, 2, 3])
+        #expect(classifyChain(trustPassed: true, rootData: root, rootName: "R", anchors: []) == .noAnswer)
+        #expect(classifyChain(trustPassed: false, rootData: root, rootName: "R", anchors: []) == .rejected)
+    }
 }

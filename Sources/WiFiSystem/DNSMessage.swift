@@ -4,9 +4,9 @@ import WiFiCore
 /// Reads a reply to `dnsQuery(name: name, id: id)`.
 ///
 /// nil when the datagram is not a reply to this query (a different id, the QR bit clear, or another question name or
-/// type), so the caller keeps waiting. `.failed` for a truncated or malformed reply and for any rcode other than
-/// 0 (answers), 3 (`.nameError`) and 5 (`.refused`). With rcode 0, the A addresses of every answer record, in order;
-/// CNAMEs and other types are skipped.
+/// type), so the caller keeps waiting. `.failed` for a truncated, TC-flagged or malformed reply and for any rcode
+/// other than 0 (answers), 3 (`.nameError`) and 5 (`.refused`). With rcode 0, the A addresses of every answer
+/// record, in order; CNAMEs and other types are skipped.
 func parseDNSResponse(_ bytes: [UInt8], id: UInt16, name: String) -> DNSLookup? {
     guard bytes.count >= 2 else { return nil }
     guard UInt16(bytes[0]) << 8 | UInt16(bytes[1]) == id else { return nil }
@@ -22,6 +22,8 @@ func parseDNSResponse(_ bytes: [UInt8], id: UInt16, name: String) -> DNSLookup? 
     guard let questionName = reader.readName(), let questionType = reader.readUInt16(),
           reader.readUInt16() != nil else { return .failed }
     guard questionType == 1, sameName(questionName, name) else { return nil }
+    // TC: the server cut the reply short, so its answers (or their absence) cannot be read as complete.
+    guard bytes[2] & 0x02 == 0 else { return .failed }
 
     switch rcode {
     case 0: break

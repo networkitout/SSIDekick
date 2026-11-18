@@ -83,4 +83,33 @@ private func record(name: [UInt8] = [0xC0, 0x0C], type: UInt16 = 1, rdata: [UInt
         let bytes = reply(answers: [record(name: [0xC0, 28], rdata: [8, 8, 8, 8])])
         #expect(parseDNSResponse(bytes, id: 0x1234, name: "dns.google") == .failed)
     }
+    @Test func truncatedFlagFails() {
+        var bytes = reply(answers: [record(rdata: [8, 8, 8, 8])])
+        bytes[2] |= 0x02  // TC
+        #expect(parseDNSResponse(bytes, id: 0x1234, name: "dns.google") == .failed)
+        var negative = reply(rcode: 3)
+        negative[2] |= 0x02
+        #expect(parseDNSResponse(negative, id: 0x1234, name: "dns.google") == .failed)
+    }
+
+    @Test func reservedLabelTypesFail() {
+        for first: UInt8 in [0x40, 0x80] {
+            let bytes = reply(answers: [record(name: [first | 0x01, 0x00], rdata: [8, 8, 8, 8])])
+            #expect(parseDNSResponse(bytes, id: 0x1234, name: "dns.google") == .failed, "\(first)")
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func twoPointerLoopFails() {
+        // The answer's name starts at offset 28: a pointer to 30, where a pointer leads back to 28.
+        let bytes = reply(answers: [record(name: [0xC0, 30, 0xC0, 28], rdata: [8, 8, 8, 8])])
+        #expect(parseDNSResponse(bytes, id: 0x1234, name: "dns.google") == .failed)
+    }
+
+    @Test func rdlengthPastTheEndFails() {
+        // A complete record header whose rdlength (10) runs past the 4 bytes that follow.
+        let header: [UInt8] = [0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2C, 0x00, 0x0A]
+        let bytes = reply(answers: [header + [8, 8, 8, 8]])
+        #expect(parseDNSResponse(bytes, id: 0x1234, name: "dns.google") == .failed)
+    }
 }

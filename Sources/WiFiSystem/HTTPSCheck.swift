@@ -11,6 +11,15 @@ func systemAnchorData() -> Set<Data> {
     return Set(certificates.map { SecCertificateCopyData($0) as Data })
 }
 
+/// How a chain that `SecTrustEvaluateWithError` judged is trusted, given the system's anchor set. A chain that
+/// passed is `.direct` when its root is one of `anchors`, else `.decryptable`. With no anchors to compare against (the
+/// root store could not be read) or no root, nothing can be said: `.noAnswer`, never `.decryptable`.
+func classifyChain(trustPassed: Bool, rootData: Data?, rootName: String?, anchors: Set<Data>) -> HTTPSState {
+    guard trustPassed else { return .rejected }
+    guard let rootData, !anchors.isEmpty else { return .noAnswer }
+    return classifyTLS(trustPassed: true, rootIsSystemAnchor: anchors.contains(rootData), rootName: rootName)
+}
+
 /// Opens a TLS connection to `url` and reports how its certificate chain is trusted: through a system root
 /// (`.direct`), through a root someone added (`.decryptable`), not at all (`.rejected`), or no TLS answer
 /// (`.noAnswer`). The connection is cancelled at the trust challenge, so no body is downloaded.
@@ -47,13 +56,15 @@ private final class TrustRecorder: NSObject, URLSessionDelegate {
             return
         }
         let passed = SecTrustEvaluateWithError(trust, nil)
-        var rootIsSystemAnchor = false
+        var rootData: Data?
         var rootName: String?
+        var anchors: Set<Data> = []
         if passed, let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate], let root = chain.last {
-            rootIsSystemAnchor = systemAnchorData().contains(SecCertificateCopyData(root) as Data)
+            rootData = SecCertificateCopyData(root) as Data
             rootName = SecCertificateCopySubjectSummary(root) as String?
+            anchors = systemAnchorData()
         }
-        let state = classifyTLS(trustPassed: passed, rootIsSystemAnchor: rootIsSystemAnchor, rootName: rootName)
+        let state = classifyChain(trustPassed: passed, rootData: rootData, rootName: rootName, anchors: anchors)
         lock.lock()
         if recorded == nil { recorded = state }
         lock.unlock()
