@@ -203,15 +203,20 @@ struct MenuContentView: View {
         row("DNS \(net.dnsServers.first ?? "–")", net.dnsBlocked ? "blocked" : millis(net.dnsLatencyMs),
             level: dnsLevel(net))
         row("Internet", internetText(net), level: internetLevel(net.internet), tintValue: true)
+        row("DNS answers", dnsAnswersText(net.dnsAnswers), level: dnsAnswersLevel(net.dnsAnswers), tintValue: true)
+        row("HTTPS (apple.com)", httpsText(net.https), level: httpsLevel(net.https), tintValue: true)
         Text(addressLine(net))
     }
 
     private func row(_ title: String, _ value: String, level: QualityLevel, tintValue: Bool = false) -> some View {
         HStack(spacing: 6) {
             Circle().fill(levelColor(level)).frame(width: 8, height: 8).accessibilityHidden(true)
-            Text(title)
-            Spacer()
-            Text(value).foregroundStyle(tintValue ? levelColor(level) : .primary)
+            Text(title).fixedSize()
+            Spacer(minLength: 8)
+            Text(value)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(tintValue ? levelColor(level) : .primary)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title), \(value), \(levelWord(level))")
