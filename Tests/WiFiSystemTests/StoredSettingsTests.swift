@@ -33,4 +33,14 @@ import WiFiSystem
         defaults.set(300, forKey: SettingsKey.scanIntervalSeconds)
         #expect(loadEngineSettings(from: defaults).scanInterval == 300)
     }
+
+    @Test func interceptionChecksDefaultOn() {
+        #expect(loadEngineSettings(from: freshDefaults()).interceptionChecksEnabled)
+    }
+
+    @Test func interceptionChecksStoredOff() {
+        let defaults = freshDefaults()
+        defaults.set(false, forKey: SettingsKey.interceptionChecksEnabled)
+        #expect(!loadEngineSettings(from: defaults).interceptionChecksEnabled)
+    }
 }

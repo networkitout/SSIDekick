@@ -90,18 +90,28 @@ private final class FakeProber: Prober {
         return pingResults.isEmpty ? .reply(2) : pingResults.removeFirst()
     }
     func dnsLatency(server: String) async -> PingResult { dnsResult }
-    var lookupCount = 0
+    /// The Engine runs the lookups concurrently, so the count is kept under a lock.
+    private let lookupLock = NSLock()
+    private var lookupCalls = 0
+    var lookupCount: Int { lookupLock.withLock { lookupCalls } }
     /// Answers keyed by name; names under example.com use the key "madeUp".
     var lookups: [String: DNSLookup] = [
         "one.one.one.one": .answered(["1.1.1.1", "1.0.0.1"]),
         "dns.google": .answered(["8.8.8.8", "8.8.4.4"]),
         "madeUp": .nameError,
     ]
+    /// Runs inside every lookup, before it answers.
+    var duringLookup: (() async -> Void)?
     func dnsLookup(name: String, server: String) async -> DNSLookup {
-        lookupCount += 1
+        lookupLock.withLock { lookupCalls += 1 }
+        if let duringLookup { await duringLookup() }
         return lookups[name.hasSuffix(".example.com") ? "madeUp" : name] ?? .failed
     }
-    func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) { internetCount += 1; return (.online, 30) }
+    var internetStatus: InternetStatus = .online
+    func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) {
+        internetCount += 1
+        return (internetStatus, internetStatus == .online ? 30 : nil)
+    }
     func publicIP() async -> String? { publicIPCount += 1; return "203.0.113.5" }
     var httpsResult: HTTPSState = .direct
     var httpsCount = 0
@@ -932,5 +942,247 @@ struct EngineTests {
         let engine = makeEngine(wifi: wifi)
         engine.refreshLink()
         #expect(engine.snapshot.eventMonitoringError == "Event monitoring refused")
+    }
+}
+
+// MARK: - Interception checks
+
+private let tamperedGoogle: DNSLookup = .answered(["172.19.0.1"])
+private let googleTampered: DNSAnswersState =
+    .tampered(name: "dns.google", address: "172.19.0.1", expected: ["8.8.8.8", "8.8.4.4"])
+
+@MainActor
+extension EngineTests {
+    @Test func interceptionNotCheckedUnlessOnline() async {
+        let prober = FakeProber()
+        prober.internetStatus = .captivePortal
+        let engine = makeEngine(prober: prober)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.dnsAnswers == .notChecked)
+        #expect(engine.snapshot.connectivity.https == .notChecked)
+        #expect(prober.lookupCount == 0)
+        #expect(prober.httpsCount == 0)
+    }
+
+    @Test func firstInterceptionCheck() async {
+        let prober = FakeProber()
+        let engine = makeEngine(prober: prober)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.dnsAnswers == .asExpected)
+        #expect(engine.snapshot.connectivity.https == .direct)
+        #expect(prober.lookupCount == 3)
+        #expect(prober.httpsCount == 1)
+    }
+
+    @Test func interceptionCheckCadence() async {
+        let config = FakeConfig()
+        let prober = FakeProber()
+        let clock = Clock()
+        let engine = makeEngine(config: config, prober: prober, clock: clock)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        clock.date = t0 + 10
+        await engine.refreshProbes()
+        #expect(prober.lookupCount == 3)
+        #expect(prober.httpsCount == 1)
+        #expect(engine.snapshot.connectivity.dnsAnswers == .asExpected)
+        #expect(engine.snapshot.connectivity.https == .direct)
+        clock.date = t0 + InterceptionCheck.interval
+        await engine.refreshProbes()
+        #expect(prober.lookupCount == 6)
+        #expect(prober.httpsCount == 2)
+        clock.date = t0 + InterceptionCheck.interval + 10
+        config.config.dnsServers = ["192.168.1.53"]
+        await engine.refreshProbes()
+        #expect(prober.lookupCount == 9)
+        #expect(prober.httpsCount == 3)
+    }
+
+    @Test func interceptionSettingOffSkipsChecks() async {
+        let prober = FakeProber()
+        let engine = makeEngine(prober: prober, settings: EngineSettings(interceptionChecksEnabled: false))
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(prober.lookupCount == 0)
+        #expect(prober.httpsCount == 0)
+        #expect(engine.snapshot.connectivity.dnsAnswers == .off)
+        #expect(engine.snapshot.connectivity.https == .off)
+        engine.settings.interceptionChecksEnabled = true
+        #expect(engine.snapshot.connectivity.dnsAnswers == .notChecked)
+        #expect(engine.snapshot.connectivity.https == .notChecked)
+        await engine.refreshProbes()
+        #expect(prober.lookupCount == 3)
+        #expect(prober.httpsCount == 1)
+        #expect(engine.snapshot.connectivity.dnsAnswers == .asExpected)
+        #expect(engine.snapshot.connectivity.https == .direct)
+    }
+
+    @Test func turningInterceptionOffAndOnAgain() async {
+        let prober = FakeProber()
+        let clock = Clock()
+        let engine = makeEngine(prober: prober, clock: clock)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        engine.settings.interceptionChecksEnabled = false
+        #expect(engine.snapshot.connectivity.dnsAnswers == .off)
+        #expect(engine.snapshot.connectivity.https == .off)
+        clock.date = t0 + 10
+        engine.settings.interceptionChecksEnabled = true
+        await engine.refreshProbes()   // within the interval, but turning the checks on makes them due
+        #expect(prober.lookupCount == 6)
+        #expect(prober.httpsCount == 2)
+        #expect(engine.snapshot.connectivity.dnsAnswers == .asExpected)
+    }
+
+    @Test func tamperedAnswerNotifiesOnce() async {
+        let prober = FakeProber()
+        prober.lookups["dns.google"] = tamperedGoogle
+        let clock = Clock()
+        let recorder = Recorder()
+        let engine = makeEngine(prober: prober, clock: clock)
+        engine.onNewFindings = { recorder.calls.append($0) }
+        engine.refreshLink()
+        await engine.refreshProbes()
+        let state = engine.snapshot.connectivity.dnsAnswers
+        #expect(state == googleTampered)
+        #expect(dnsAnswersLevel(state) == .poor)
+        #expect(engine.snapshot.findings.map(\.signal) == [.dnsTampered])
+        #expect(recorder.calls.count == 1)
+        #expect(recorder.calls.first?.map(\.signal) == [.dnsTampered])
+        for step in 1...3 {
+            clock.date = t0 + Double(step) * (InterceptionCheck.interval + 1)
+            await engine.refreshProbes()
+        }
+        #expect(prober.lookupCount == 12)
+        #expect(engine.snapshot.connectivity.dnsAnswers == googleTampered)
+        #expect(recorder.calls.count == 1)
+    }
+
+    @Test func handSetPrivateServerIsFilteredByIt() async {
+        let config = FakeConfig()
+        config.config = NetworkConfig(gatewayIP: "192.168.1.1", dnsServers: ["192.168.1.2"], ipv4: ["192.168.1.20"],
+                                      ipv6: [], dnsServersSetByHand: true)
+        let prober = FakeProber()
+        prober.lookups["dns.google"] = tamperedGoogle
+        let recorder = Recorder()
+        let engine = makeEngine(config: config, prober: prober)
+        engine.onNewFindings = { recorder.calls.append($0) }
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.dnsAnswers == .filteredByYourServer(name: "dns.google", address: "172.19.0.1"))
+        #expect(engine.snapshot.findings.isEmpty)
+        #expect(recorder.calls.isEmpty)
+    }
+
+    @Test func handSetPublicServerIsStillTampered() async {
+        let config = FakeConfig()
+        config.config = NetworkConfig(gatewayIP: "192.168.1.1", dnsServers: ["1.1.1.1"], ipv4: ["192.168.1.20"],
+                                      ipv6: [], dnsServersSetByHand: true)
+        let prober = FakeProber()
+        prober.lookups["dns.google"] = tamperedGoogle
+        let engine = makeEngine(config: config, prober: prober)
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.dnsAnswers == googleTampered)
+        #expect(engine.snapshot.findings.map(\.signal) == [.dnsTampered])
+    }
+
+    @Test func decryptableHTTPSRaisesNothing() async {
+        let prober = FakeProber()
+        prober.httpsResult = .decryptable(root: "X")
+        let recorder = Recorder()
+        let engine = makeEngine(prober: prober)
+        engine.onNewFindings = { recorder.calls.append($0) }
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.https == .decryptable(root: "X"))
+        #expect(engine.snapshot.findings.isEmpty)
+        #expect(engine.snapshot.connectedVerdict == .clear)
+        #expect(recorder.calls.isEmpty)
+    }
+
+    @Test func sessionChangeDuringCheckDropsIt() async {
+        let wifi = FakeWiFi()
+        let prober = FakeProber()
+        prober.lookups["dns.google"] = tamperedGoogle
+        let clock = Clock()
+        let hold = Gate(clock: clock)
+        prober.duringLookup = { _ = await hold.sleep(0) }
+        let recorder = Recorder()
+        let engine = makeEngine(wifi: wifi, prober: prober, clock: clock)
+        engine.onNewFindings = { recorder.calls.append($0) }
+        engine.refreshLink()
+        let probe = Task { await engine.refreshProbes() }
+        for _ in 0..<100_000 where hold.sleeps.count < 3 { await Task.yield() }
+        #expect(hold.sleeps.count == 3)   // all three lookups are held in flight
+        wifi.link = makeLink("Home", "00:14:6c:00:00:01")
+        engine.refreshLink()
+        hold.open()
+        await probe.value
+        #expect(engine.snapshot.connectivity.dnsAnswers == .notChecked)
+        #expect(engine.snapshot.connectivity.https == .notChecked)
+        #expect(!engine.snapshot.findings.contains { $0.signal == .dnsTampered })
+        #expect(recorder.calls.isEmpty)
+        await engine.refreshProbes()
+        #expect(prober.lookupCount == 6)
+        #expect(engine.snapshot.connectivity.dnsAnswers == googleTampered)
+        #expect(recorder.calls.flatMap { $0 }.map(\.ssid) == ["Home"])
+    }
+
+    @Test func tamperedWithoutLocationRaisesNothing() async {
+        let wifi = FakeWiFi()
+        wifi.link = makeLink(nil, nil)
+        let location = FakeLocation()
+        location.isAuthorized = false
+        let prober = FakeProber()
+        prober.lookups["dns.google"] = tamperedGoogle
+        let recorder = Recorder()
+        let engine = makeEngine(wifi: wifi, prober: prober, location: location)
+        engine.onNewFindings = { recorder.calls.append($0) }
+        engine.refreshLink()
+        await engine.refreshProbes()
+        #expect(engine.snapshot.connectivity.dnsAnswers == googleTampered)
+        #expect(engine.snapshot.findings.isEmpty)
+        #expect(recorder.calls.isEmpty)
+    }
+
+    @Test func interceptionDemoScenarios() async {
+        let recorder = Recorder()
+        let tampered = makeDemoEngine(.dnsTampered, recorder: recorder)
+        tampered.refreshLink()
+        await tampered.refreshProbes()
+        #expect(tampered.snapshot.connectivity.dnsAnswers == googleTampered)
+        #expect(tampered.snapshot.findings.map(\.signal) == [.dnsTampered])
+        #expect(tampered.snapshot.connectedVerdict == .suspect)
+
+        let filtered = makeDemoEngine(.dnsFiltered, recorder: recorder)
+        filtered.refreshLink()
+        await filtered.refreshProbes()
+        #expect(filtered.snapshot.connectivity.dnsAnswers == .filtered)
+        #expect(filtered.snapshot.findings.isEmpty)
+
+        let rewritten = makeDemoEngine(.dnsRewritten, recorder: recorder)
+        rewritten.refreshLink()
+        await rewritten.refreshProbes()
+        #expect(rewritten.snapshot.connectivity.dnsAnswers == .rewritten(address: "10.20.0.80"))
+        #expect(rewritten.snapshot.findings.isEmpty)
+
+        let decryptable = makeDemoEngine(.httpsDecryptable, recorder: recorder)
+        decryptable.refreshLink()
+        await decryptable.refreshProbes()
+        #expect(decryptable.snapshot.connectivity.https == .decryptable(root: "Demo Inspection CA"))
+        #expect(decryptable.snapshot.connectivity.dnsAnswers == .asExpected)
+        #expect(decryptable.snapshot.findings.isEmpty)
+
+        let office = makeDemoEngine(.office, recorder: recorder)
+        office.refreshLink()
+        await office.refreshProbes()
+        #expect(office.snapshot.connectivity.dnsAnswers == .asExpected)
+        #expect(office.snapshot.connectivity.https == .direct)
+        #expect(office.snapshot.findings.isEmpty)
+
+        #expect(recorder.calls.flatMap { $0 }.map(\.signal) == [.dnsTampered])
     }
 }

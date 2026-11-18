@@ -3,6 +3,7 @@ import Foundation
 public enum SettingsKey {
     public static let scanIntervalSeconds = "scanIntervalSeconds"
     public static let publicIPEnabled = "publicIPEnabled"
+    public static let interceptionChecksEnabled = "interceptionChecksEnabled"
 }
 
 /// Maps the stored interval to the engine's: 0 is off; 30, 60 and 300 are themselves; anything else
@@ -18,5 +19,7 @@ public func scanInterval(fromStoredSeconds seconds: Int?) -> TimeInterval? {
 public func loadEngineSettings(from defaults: UserDefaults) -> EngineSettings {
     let seconds = defaults.object(forKey: SettingsKey.scanIntervalSeconds) as? Int
     let publicIP = defaults.object(forKey: SettingsKey.publicIPEnabled) as? Bool ?? true
-    return EngineSettings(scanInterval: scanInterval(fromStoredSeconds: seconds), publicIPEnabled: publicIP)
+    let interception = defaults.object(forKey: SettingsKey.interceptionChecksEnabled) as? Bool ?? true
+    return EngineSettings(scanInterval: scanInterval(fromStoredSeconds: seconds), publicIPEnabled: publicIP,
+                          interceptionChecksEnabled: interception)
 }

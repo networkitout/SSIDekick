@@ -6,10 +6,13 @@ public struct EngineSettings: Sendable, Equatable {
     /// Seconds between background scans; nil turns background scanning off.
     public var scanInterval: TimeInterval?
     public var publicIPEnabled: Bool
+    /// The DNS answers and HTTPS checks.
+    public var interceptionChecksEnabled: Bool
 
-    public init(scanInterval: TimeInterval? = 60, publicIPEnabled: Bool = true) {
+    public init(scanInterval: TimeInterval? = 60, publicIPEnabled: Bool = true, interceptionChecksEnabled: Bool = true) {
         self.scanInterval = scanInterval
         self.publicIPEnabled = publicIPEnabled
+        self.interceptionChecksEnabled = interceptionChecksEnabled
     }
 }
 
@@ -21,6 +24,7 @@ public final class Engine {
     public var settings: EngineSettings {
         didSet {
             if !settings.publicIPEnabled { snapshot.connectivity.publicIP = nil }
+            if settings.interceptionChecksEnabled != oldValue.interceptionChecksEnabled { interceptionSettingChanged() }
             if settings.scanInterval != oldValue.scanInterval, tasks.isRunning { startScanLoop() }
         }
     }
@@ -70,6 +74,10 @@ public final class Engine {
     /// A probe was asked for while one was in flight.
     @ObservationIgnored private var probeRequested = false
     @ObservationIgnored private var fetchingPublicIP = false
+    /// When the interception checks last completed and were committed in this session; nil when they have not.
+    @ObservationIgnored private var lastInterceptionCheck: Date?
+    /// The DNS servers the last committed interception check ran against.
+    @ObservationIgnored private var interceptionCheckServers: [String] = []
     @ObservationIgnored private let tasks = TaskBag()
     @ObservationIgnored private let linkNap = Nap()
     @ObservationIgnored private let probeNap = Nap()
@@ -164,9 +172,31 @@ public final class Engine {
         monitor.reset()
         sessionName = nil
         connectionEpoch += 1
+        resetConnectivity()
+        probesStale = true
+    }
+
+    /// Clears the measured connectivity, the loss window and the interception check schedule.
+    private func resetConnectivity() {
         snapshot.connectivity = ConnectivitySnapshot()
         lossWindow = LossWindow()
-        probesStale = true
+        lastInterceptionCheck = nil
+        interceptionCheckServers = []
+    }
+
+    /// Off shows both rows as off at once. On shows them as not checked and makes the checks due, then cuts the
+    /// probe wait short (or asks for one more probe when one is in flight) so they run without waiting a cadence.
+    private func interceptionSettingChanged() {
+        if settings.interceptionChecksEnabled {
+            snapshot.connectivity.dnsAnswers = .notChecked
+            snapshot.connectivity.https = .notChecked
+            lastInterceptionCheck = nil
+            if probing { probeRequested = true }
+            probeNap.wake()
+        } else {
+            snapshot.connectivity.dnsAnswers = .off
+            snapshot.connectivity.https = .off
+        }
     }
 
     /// The link and probe loops re-read their cadence after every tick, so they are started only once.
@@ -265,15 +295,15 @@ public final class Engine {
         recompute(completedScan: nil)
     }
 
-    /// Reads the IP configuration and probes the gateway, DNS and internet. A call that arrives while a probe is
-    /// in flight is not lost: any number of them coalesce into one more probe after the current one finishes.
+    /// Reads the IP configuration and probes the gateway, DNS and internet, then runs the interception checks when
+    /// they are due. A call that arrives while a probe is in flight is not lost: any number of them coalesce into
+    /// one more probe after the current one finishes.
     /// Nothing is probed unless Wi-Fi is connected; otherwise the connectivity values are cleared.
     public func refreshProbes() async {
         guard wifi.state() == .connected else {
             if snapshot.connectivity != ConnectivitySnapshot() {
                 connectionEpoch += 1   // drops any probe still in flight
-                snapshot.connectivity = ConnectivitySnapshot()
-                lossWindow = LossWindow()
+                resetConnectivity()
             }
             return
         }
@@ -296,6 +326,69 @@ public final class Engine {
 
     private enum ProbeOutcome { case committed, sessionChanged, configChanged }
 
+    /// What a probe round does about the DNS answers and HTTPS checks.
+    private enum InterceptionOutcome {
+        /// The setting was off when the round started.
+        case off
+        /// The captive check was not online: nothing was sent and both rows read "not checked".
+        case notOnline
+        /// The last committed check is recent and used the same DNS servers; the rows keep their values.
+        case notDue
+        case checked(dns: DNSAnswersState, https: HTTPSState)
+    }
+
+    /// Due when no check has been committed this session, the last one is `InterceptionCheck.interval` old, or the
+    /// DNS servers changed since it ran.
+    private func interceptionCheckDue(servers: [String]) -> Bool {
+        guard let lastInterceptionCheck else { return true }
+        return now().timeIntervalSince(lastInterceptionCheck) >= InterceptionCheck.interval
+            || servers != interceptionCheckServers
+    }
+
+    private func interceptionOutcome(_ current: NetworkConfig, internet: InternetStatus) async -> InterceptionOutcome {
+        guard settings.interceptionChecksEnabled else { return .off }
+        guard internet == .online else { return .notOnline }
+        guard interceptionCheckDue(servers: current.dnsServers) else { return .notDue }
+        let prober = self.prober
+        async let https = prober.httpsCheck()
+        guard let server = current.dnsServers.first else { return .checked(dns: .notChecked, https: await https) }
+        let names = InterceptionCheck.knownNames.map(\.name) + [madeUpName()]
+        let answers = await withTaskGroup(of: (Int, DNSLookup).self) { group in
+            for (index, name) in names.enumerated() {
+                group.addTask { (index, await prober.dnsLookup(name: name, server: server)) }
+            }
+            var answers = [DNSLookup](repeating: .failed, count: names.count)
+            for await (index, answer) in group { answers[index] = answer }
+            return answers
+        }
+        let known = zip(names, answers).dropLast().map { (name: $0.0, lookup: $0.1) }
+        let dns = classifyDNS(known: known, madeUp: answers[answers.count - 1],
+                              handSetPrivateServer: current.dnsServersSetByHand && isPrivateAddress(server))
+        return .checked(dns: dns, https: await https)
+    }
+
+    /// Commits a round's interception outcome, reading the setting as it is now: it may have changed mid-round.
+    private func commitInterception(_ outcome: InterceptionOutcome, servers: [String]) {
+        guard settings.interceptionChecksEnabled else {
+            snapshot.connectivity.dnsAnswers = .off
+            snapshot.connectivity.https = .off
+            return
+        }
+        switch outcome {
+        case .off, .notDue:
+            break   // .off: turned on mid-round; the rows already read "not checked" and another round is due
+        case .notOnline:
+            snapshot.connectivity.dnsAnswers = .notChecked
+            snapshot.connectivity.https = .notChecked
+            lastInterceptionCheck = nil   // check again as soon as the captive check is online
+        case .checked(let dns, let https):
+            snapshot.connectivity.dnsAnswers = dns
+            snapshot.connectivity.https = https
+            lastInterceptionCheck = now()
+            interceptionCheckServers = servers
+        }
+    }
+
     private func probeOnce() async -> ProbeOutcome {
         let epoch = connectionEpoch
         let current = config.current()
@@ -311,6 +404,7 @@ public final class Engine {
             dnsResult = await prober.dnsLatency(server: server)
         }
         let internet = await prober.internetCheck()
+        let interception = await interceptionOutcome(current, internet: internet.status)
 
         // Results measured against a previous network or an outdated configuration are discarded whole,
         // loss sample included.
@@ -338,6 +432,7 @@ public final class Engine {
         snapshot.connectivity.internetLatencyMs = internet.latencyMs
         snapshot.connectivity.ipv4 = current.ipv4
         snapshot.connectivity.ipv6 = current.ipv6
+        commitInterception(interception, servers: current.dnsServers)
         recompute(completedScan: nil)
         return .committed
     }
@@ -394,8 +489,7 @@ public final class Engine {
         if name != sessionName {
             sessionName = name
             connectionEpoch += 1
-            snapshot.connectivity = ConnectivitySnapshot()
-            lossWindow = LossWindow()
+            resetConnectivity()
             probesStale = true
         }
 
@@ -403,7 +497,8 @@ public final class Engine {
         if let link, let name, let address = link.bssid {
             connection = ConnectionState(ssid: name, bssid: address, rssi: link.rssi,
                                          gatewayMAC: snapshot.connectivity.gatewayMAC,
-                                         dnsServers: snapshot.connectivity.dnsServers)
+                                         dnsServers: snapshot.connectivity.dnsServers,
+                                         dnsAnswers: snapshot.connectivity.dnsAnswers)
         }
         if let completedScan { siblingFindings = detector.findings(in: completedScan) }
         let connectedFindings = monitor.update(

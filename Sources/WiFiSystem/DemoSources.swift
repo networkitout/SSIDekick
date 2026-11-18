@@ -4,6 +4,7 @@ import WiFiCore
 /// Canned situations for trying the app without real Wi-Fi data. Demo sources never touch the network.
 public enum DemoScenario: String, CaseIterable {
     case office, planeTwin, clonedAddress, newcomer, gatewayChange, locationDenied, wifiOff
+    case dnsTampered, dnsFiltered, dnsRewritten, httpsDecryptable
 }
 
 /// `now` is the clock the time-based scenarios (the gateway switch) follow; tests pass a controllable one.
@@ -13,7 +14,7 @@ public func demoSources(_ scenario: DemoScenario, now: @escaping () -> Date = Da
     let created = now()
     let wifi: DemoWiFi
     switch scenario {
-    case .office:
+    case .office, .dnsTampered, .dnsFiltered, .dnsRewritten, .httpsDecryptable:
         wifi = DemoWiFi(connectedTo: Demo.corp[0], scan: Demo.corp + [Demo.home[0]])
     case .planeTwin:
         wifi = DemoWiFi(connectedTo: Demo.inflight[0], scan: Demo.inflight)
@@ -33,7 +34,7 @@ public func demoSources(_ scenario: DemoScenario, now: @escaping () -> Date = Da
 
     let config: DemoConfig
     switch scenario {
-    case .office, .clonedAddress, .locationDenied:
+    case .office, .clonedAddress, .locationDenied, .dnsTampered, .dnsFiltered, .dnsRewritten, .httpsDecryptable:
         config = DemoConfig(NetworkConfig(gatewayIP: "10.20.0.1", dnsServers: ["10.20.0.53"],
                                           ipv4: ["10.20.14.87"], ipv6: ["fd12:3456:789a::87"]))
     case .planeTwin:
@@ -57,7 +58,19 @@ public func demoSources(_ scenario: DemoScenario, now: @escaping () -> Date = Da
         neighbors = DemoNeighbors(answer: Demo.mac("00:14:6c:5e:a0:01"), created: created, now: now)
     }
 
-    let prober = scenario == .wifiOff ? DemoProber(online: false) : DemoProber(online: true)
+    let prober = DemoProber(online: scenario != .wifiOff)
+    switch scenario {
+    case .dnsTampered:
+        prober.lookups["dns.google"] = .answered(["172.19.0.1"])
+    case .dnsFiltered:
+        for known in InterceptionCheck.knownNames { prober.lookups[known.name] = .answered(["146.112.61.106"]) }
+    case .dnsRewritten:
+        prober.lookups["madeUp"] = .answered(["10.20.0.80"])
+    case .httpsDecryptable:
+        prober.https = .decryptable(root: "Demo Inspection CA")
+    default:
+        break
+    }
     let location = DemoLocation(authorized: scenario != .locationDenied)
     return (wifi, config, neighbors, prober, location, Demo.vendors)
 }
@@ -206,7 +219,8 @@ private final class DemoProber: Prober {
     func internetCheck() async -> (status: InternetStatus, latencyMs: Double?) { online ? (.online, 41.7) : (.offline, nil) }
     /// An address from the documentation range (RFC 5737).
     func publicIP() async -> String? { online ? "203.0.113.24" : nil }
-    func httpsCheck() async -> HTTPSState { .direct }
+    var https: HTTPSState = .direct
+    func httpsCheck() async -> HTTPSState { https }
 }
 
 private final class DemoLocation: LocationAuthorizing {
