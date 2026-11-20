@@ -34,6 +34,18 @@ once the one-time setup below is done.
    The list should include `Developer ID Application: <Your Name> (<TEAMID>)`. Back up the
    certificate with its private key (export a .p12 from Keychain Access). Without the key you can't
    sign updates with the same identity.
+
+   - Only the team's Account Holder can create Developer ID certificates. If the option is greyed
+     out in Xcode, sign in there as the Account Holder, or create the certificate at
+     developer.apple.com > Certificates, IDs & Profiles.
+   - `<TEAMID>` is your 10-character Team ID: the `TeamIdentifier` in `codesign -dv build/WiFiUtil.app`
+     or Membership details on developer.apple.com. It is *not* the code in parentheses in an
+     `Apple Development: <Name> (…)` identity, which is a per-person ID.
+   - Don't revoke a Developer ID certificate to recover from a lost key or a new Mac. Revoking it makes
+     Gatekeeper refuse copies already signed with it. Create a new certificate instead (a team can
+     have several) and remove the old one from the keychain once you no longer need it.
+   - An `Apple Development` certificate only signs local builds. Replacing it (for example after a
+     revoke) doesn't affect releases.
 3. **Store notary credentials in the keychain.** Create an app-specific password at
    [account.apple.com](https://account.apple.com) (Sign-In and Security > App-Specific Passwords),
    then run:
@@ -60,6 +72,9 @@ once the one-time setup below is done.
    submits to Apple's notary service and waits, staples the ticket to the app, checks it with
    `spctl`, and prints the path of `build/release/WiFiUtil-<version>.zip`. Ship that zip.
 3. If notarization is rejected, the script prints the `xcrun notarytool log …` command that shows why.
+
+A Developer ID build has a different code signature from your local `Apple Development` builds, so
+the first time you run a release build on your own Mac, macOS may ask for Location access again.
 
 ### Bundle identifier
 
