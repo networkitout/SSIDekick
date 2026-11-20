@@ -33,6 +33,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/WiFiUtil" "$exe"
 cp Support/Info.plist "$app/Contents/Info.plist"
 cp Support/oui.tsv "$app/Contents/Resources/oui.tsv"
+cp Support/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"  # regenerate with scripts/make-icon.swift
 
 # The linker records rpaths into this machine's Xcode toolchain. Every Swift library the app links
 # lives in /usr/lib/swift on macOS 15+, so those paths are unused; drop them so the shipped binary
