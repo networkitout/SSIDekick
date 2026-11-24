@@ -64,5 +64,9 @@ struct HostWindowObserver: NSViewRepresentable {
 
 /// Keeps the app running when its last window closes: it lives in the menu bar.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        StatusItemContextMenu.shared.install()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }

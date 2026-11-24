@@ -7,8 +7,12 @@ import WiFiSystem
 /// in its own body, so the glyph redraws with every change without re-evaluating the app's scenes.
 struct StatusIcon: View {
     let engine: Engine
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
+        // Hands SwiftUI's Settings opener to the right-click menu. Done in body, which always runs, because
+        // onAppear isn't known to fire for a menu bar label; the assignment is cheap.
+        let _ = (StatusItemContextMenu.shared.openSettings = openSettings)
         let snapshot = engine.snapshot
         image(statusGlyph(for: snapshot)).accessibilityLabel(statusAccessibilityLabel(for: snapshot))
     }
