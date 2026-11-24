@@ -94,13 +94,13 @@ public func warningLines(for snapshot: Snapshot) -> [WarningLine] {
 /// The menu bar icon's accessibility label, following the same wording as the glyph and the warning lines.
 /// It reads the snapshot, never the symbol name.
 public func statusAccessibilityLabel(for snapshot: Snapshot) -> String {
-    guard isOnNetwork(snapshot) else { return "WiFiUtil: not connected" }
+    guard isOnNetwork(snapshot) else { return "SSIDekick: not connected" }
     switch snapshot.connectedVerdict {
     case .suspect, .worthALook:
         let lines = warningLines(for: snapshot).map(\.text)
-        if !lines.isEmpty { return "WiFiUtil: " + lines.joined(separator: "; ") }
-        return snapshot.connectedVerdict == .suspect ? "WiFiUtil: suspect" : "WiFiUtil: worth a look"
+        if !lines.isEmpty { return "SSIDekick: " + lines.joined(separator: "; ") }
+        return snapshot.connectedVerdict == .suspect ? "SSIDekick: suspect" : "SSIDekick: worth a look"
     case .clear, .note:
-        return snapshot.connectivity.internet == .offline ? "WiFiUtil: no internet" : "WiFiUtil"
+        return snapshot.connectivity.internet == .offline ? "SSIDekick: no internet" : "SSIDekick"
     }
 }

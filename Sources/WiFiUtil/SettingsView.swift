@@ -61,7 +61,7 @@ struct SettingsView: View {
     private var loginNote: String? {
         switch loginStatus {
         case .requiresApproval: "Waiting for approval in System Settings → General → Login Items."
-        case .notFound: "Login item not found; run the built WiFiUtil.app."
+        case .notFound: "Login item not found; run the built SSIDekick.app."
         default: nil
         }
     }

@@ -4,7 +4,7 @@ import WiFiCore
 
 /// Posts one notification per finding. Permission is requested the first time a finding needs it, off the main
 /// actor's critical path; if it is denied this does nothing (the icon colour still changes).
-/// It is also the notification centre's delegate, so banners show while a WiFiUtil window is frontmost.
+/// It is also the notification centre's delegate, so banners show while an SSIDekick window is frontmost.
 /// Outside an app bundle (`swift run`) it does nothing: the notification centre traps there.
 @MainActor
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {

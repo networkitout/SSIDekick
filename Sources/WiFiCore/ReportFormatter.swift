@@ -50,7 +50,7 @@ public func formatReport(_ snapshot: Snapshot, vendors: VendorLookup, now: Date)
     let visible = snapshot.locationAuthorized
     var lines: [String] = []
 
-    lines.append("WiFiUtil report \(now.formatted(.iso8601))")
+    lines.append("SSIDekick report \(now.formatted(.iso8601))")
 
     lines.append("")
     lines.append("Link")

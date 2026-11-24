@@ -1,6 +1,6 @@
 #!/bin/bash
-# Builds build/WiFiUtil.app as a universal (arm64 + x86_64) release binary and signs it with the
-# hardened runtime and Support/WiFiUtil.entitlements.
+# Builds build/SSIDekick.app as a universal (arm64 + x86_64) release binary and signs it with the
+# hardened runtime and Support/SSIDekick.entitlements. (The SwiftPM product is still named WiFiUtil.)
 # Signing identity: $SIGN_IDENTITY, default "Apple Development". A "Developer ID Application"
 # identity also gets a secure timestamp (required for notarization); scripts/release.sh uses that.
 # Works from any directory.
@@ -24,10 +24,10 @@ swift build -c release --product WiFiUtil "${archs[@]}"
 bin="$(swift build -c release --product WiFiUtil "${archs[@]}" --show-bin-path)"
 
 plutil -lint -s Support/Info.plist
-plutil -lint -s Support/WiFiUtil.entitlements
+plutil -lint -s Support/SSIDekick.entitlements
 
-app="build/WiFiUtil.app"
-exe="$app/Contents/MacOS/WiFiUtil"
+app="build/SSIDekick.app"
+exe="$app/Contents/MacOS/SSIDekick"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/WiFiUtil" "$exe"
@@ -57,7 +57,7 @@ case "$identity" in
 esac
 
 codesign --force --sign "$identity" --options runtime "$timestamp" \
-    --entitlements Support/WiFiUtil.entitlements "$app"
+    --entitlements Support/SSIDekick.entitlements "$app"
 codesign --verify --strict --deep "$app"
 
 echo "$root/$app"

@@ -122,16 +122,16 @@ private let antenna = "antenna.radiowaves.left.and.right"
 
 @Suite struct StatusAccessibilityTests {
     @Test func labelsFollowTheWarningLines() {
-        #expect(statusAccessibilityLabel(for: snapshot()) == "WiFiUtil")
-        #expect(statusAccessibilityLabel(for: snapshot(state: .off, link: nil)) == "WiFiUtil: not connected")
-        #expect(statusAccessibilityLabel(for: snapshot(internet: .offline)) == "WiFiUtil: no internet")
+        #expect(statusAccessibilityLabel(for: snapshot()) == "SSIDekick")
+        #expect(statusAccessibilityLabel(for: snapshot(state: .off, link: nil)) == "SSIDekick: not connected")
+        #expect(statusAccessibilityLabel(for: snapshot(internet: .offline)) == "SSIDekick: no internet")
         #expect(statusAccessibilityLabel(for: snapshot(findings: [finding(.securityMismatch)], verdict: .suspect))
-                == "WiFiUtil: 1 suspect twin")
+                == "SSIDekick: 1 suspect twin")
         #expect(statusAccessibilityLabel(for: snapshot(findings: [finding(.gatewayChanged, bssid: nil)], verdict: .suspect))
-                == "WiFiUtil: Gateway changed")
+                == "SSIDekick: Gateway changed")
         #expect(statusAccessibilityLabel(for: snapshot(findings: [finding(.vendorMismatch),
                                                                  finding(.dnsChanged, bssid: nil)], verdict: .suspect))
-                == "WiFiUtil: 1 worth a look; DNS servers changed")
+                == "SSIDekick: 1 worth a look; DNS servers changed")
     }
 
 @Suite struct DNSAnswersWarningTests {
@@ -140,7 +140,7 @@ private let antenna = "antenna.radiowaves.left.and.right"
         #expect(warningLines(for: s) == [WarningLine(text: "DNS answers tampered", verdict: .suspect)])
         #expect(connectionWarning(for: s) == nil)
         #expect(statusGlyph(for: s) == StatusGlyph(symbol: antenna, tint: .red))
-        #expect(statusAccessibilityLabel(for: s) == "WiFiUtil: DNS answers tampered")
+        #expect(statusAccessibilityLabel(for: s) == "SSIDekick: DNS answers tampered")
     }
     @Test func verdictComesFromNetworkVerdict() {
         let findings = [finding(.dnsTampered, bssid: nil)]

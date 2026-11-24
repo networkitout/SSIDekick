@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds, signs (Developer ID), notarizes and staples WiFiUtil, then prints the path of the zip to ship.
+# Builds, signs (Developer ID), notarizes and staples SSIDekick, then prints the path of the zip to ship.
 #
 # Needs, once per machine (see README "Releasing"):
 #   - a "Developer ID Application" certificate with its private key in the login keychain
@@ -7,14 +7,14 @@
 #
 # Environment:
 #   SIGN_IDENTITY   Developer ID identity to sign with. Optional when the keychain holds exactly one.
-#   NOTARY_PROFILE  notarytool keychain profile name. Default: wifiutil-notary
+#   NOTARY_PROFILE  notarytool keychain profile name. Default: ssidekick-notary
 # Works from any directory.
 set -euo pipefail
 
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-profile="${NOTARY_PROFILE:-wifiutil-notary}"
+profile="${NOTARY_PROFILE:-ssidekick-notary}"
 
 # Captured first: under pipefail, grep closing the pipe early could fail the pipeline even on a match.
 identities="$(security find-identity -v -p codesigning)"
@@ -47,7 +47,7 @@ fi
 app="$(SIGN_IDENTITY="$identity" scripts/build-app.sh | tail -n 1)"
 version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
 outdir="$root/build/release"
-zip="$outdir/WiFiUtil-$version.zip"
+zip="$outdir/SSIDekick-$version.zip"
 mkdir -p "$outdir"
 rm -f "$zip"
 

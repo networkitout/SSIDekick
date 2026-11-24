@@ -1,7 +1,10 @@
-# WiFiUtil
+# SSIDekick
 
 A macOS menu bar app (macOS 15+) that shows Wi-Fi quality and connectivity and flags duplicate SSIDs
 (possible evil twins).
+
+The project was first called WiFiUtil, and that name remains in the code: the Swift package, its
+targets and the placeholder bundle identifier. Users only see SSIDekick.
 
 ## Building for yourself
 
@@ -9,8 +12,8 @@ A macOS menu bar app (macOS 15+) that shows Wi-Fi quality and connectivity and f
 scripts/build-app.sh
 ```
 
-This builds `build/WiFiUtil.app` as a universal binary (Apple silicon and Intel), signed with the
-hardened runtime and `Support/WiFiUtil.entitlements`. It uses your `Apple Development` identity by
+This builds `build/SSIDekick.app` as a universal binary (Apple silicon and Intel), signed with the
+hardened runtime and `Support/SSIDekick.entitlements`. It uses your `Apple Development` identity by
 default; set `SIGN_IDENTITY` to use another one from `security find-identity -v -p codesigning`.
 
 A build signed with `Apple Development` runs on your own Mac. Gatekeeper blocks it on other Macs.
@@ -38,7 +41,7 @@ once the one-time setup below is done.
    - Only the team's Account Holder can create Developer ID certificates. If the option is greyed
      out in Xcode, sign in there as the Account Holder, or create the certificate at
      developer.apple.com > Certificates, IDs & Profiles.
-   - `<TEAMID>` is your 10-character Team ID: the `TeamIdentifier` in `codesign -dv build/WiFiUtil.app`
+   - `<TEAMID>` is your 10-character Team ID: the `TeamIdentifier` in `codesign -dv build/SSIDekick.app`
      or Membership details on developer.apple.com. It is *not* the code in parentheses in an
      `Apple Development: <Name> (…)` identity, which is a per-person ID.
    - Don't revoke a Developer ID certificate to recover from a lost key or a new Mac. Revoking it makes
@@ -51,11 +54,11 @@ once the one-time setup below is done.
    then run:
 
    ```bash
-   xcrun notarytool store-credentials wifiutil-notary --apple-id "<your Apple ID>" --team-id "<TEAMID>"
+   xcrun notarytool store-credentials ssidekick-notary --apple-id "<your Apple ID>" --team-id "<TEAMID>"
    ```
 
    It prompts for the app-specific password and saves everything in your login keychain under the
-   profile name `wifiutil-notary`. Credentials never go in this repository. To use another profile
+   profile name `ssidekick-notary`. Credentials never go in this repository. To use another profile
    name, set `NOTARY_PROFILE` when running the release script.
 4. **Choose the bundle identifier** (see below) before the first public release.
 
@@ -70,7 +73,7 @@ once the one-time setup below is done.
 
    The script signs with your Developer ID identity (set `SIGN_IDENTITY` if you have more than one),
    submits to Apple's notary service and waits, staples the ticket to the app, checks it with
-   `spctl`, and prints the path of `build/release/WiFiUtil-<version>.zip`. Ship that zip.
+   `spctl`, and prints the path of `build/release/SSIDekick-<version>.zip`. Ship that zip.
 3. If notarization is rejected, the script prints the `xcrun notarytool log …` command that shows why.
 
 A Developer ID build has a different code signature from your local `Apple Development` builds, so
@@ -80,7 +83,7 @@ the first time you run a release build on your own Mac, macOS may ask for Locati
 
 The app's bundle identifier is still the placeholder `local.wifiutil.WiFiUtil` (in
 `Support/Info.plist`). Before the first public release, replace it with a reverse-DNS identifier on a
-domain you control, for example `com.example.WiFiUtil`.
+domain you control, for example `com.example.SSIDekick`.
 
 Pick it once. macOS records Location Services and notification permissions per bundle identifier, so
 changing it after release resets those permissions for every user. Each user then has to grant

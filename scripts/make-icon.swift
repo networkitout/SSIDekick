@@ -1,4 +1,4 @@
-// Draws the WiFiUtil app icon (a magnifying glass over a blue Wi-Fi symbol) and writes Support/AppIcon.icns.
+// Draws the SSIDekick app icon (a magnifying glass over a blue Wi-Fi symbol) and writes Support/AppIcon.icns.
 // Run from the repo root:  swift scripts/make-icon.swift [output.icns]
 //
 // Everything is drawn here with Core Graphics (no SF Symbols: their license excludes app icons).
