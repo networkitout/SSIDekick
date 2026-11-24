@@ -107,3 +107,8 @@ canvas). macOS 26 shows an icon on a grey plate when its outline doesn't match t
 The app is not sandboxed. Under the hardened runtime it needs a single entitlement,
 `com.apple.security.personal-information.location`, because macOS only reveals Wi-Fi network names
 and BSSIDs to apps with Location access.
+
+## License
+
+MIT. See [LICENSE](LICENSE). `Support/oui.tsv` is generated from the IEEE public MA-L registry by
+`scripts/update-oui.sh`.
