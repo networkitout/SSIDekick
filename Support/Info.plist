@@ -9,7 +9,7 @@
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>local.wifiutil.WiFiUtil</string>
+	<string>io.github.networkitout.SSIDekick</string>
 	<key>CFBundleName</key>
 	<string>SSIDekick</string>
 	<key>CFBundlePackageType</key>

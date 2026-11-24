@@ -4,7 +4,7 @@ A macOS menu bar app (macOS 15+) that shows Wi-Fi quality and connectivity and f
 (possible evil twins).
 
 The project was first called WiFiUtil, and that name remains in the code: the Swift package, its
-targets and the placeholder bundle identifier. Users only see SSIDekick.
+targets and some internal labels. Users only see SSIDekick.
 
 ## Building for yourself
 
@@ -60,7 +60,7 @@ once the one-time setup below is done.
    It prompts for the app-specific password and saves everything in your login keychain under the
    profile name `ssidekick-notary`. Credentials never go in this repository. To use another profile
    name, set `NOTARY_PROFILE` when running the release script.
-4. **Choose the bundle identifier** (see below) before the first public release.
+4. **Keep the bundle identifier** (see below).
 
 ### Each release
 
@@ -81,13 +81,10 @@ the first time you run a release build on your own Mac, macOS may ask for Locati
 
 ### Bundle identifier
 
-The app's bundle identifier is still the placeholder `local.wifiutil.WiFiUtil` (in
-`Support/Info.plist`). Before the first public release, replace it with a reverse-DNS identifier on a
-domain you control, for example `com.example.SSIDekick`.
-
-Pick it once. macOS records Location Services and notification permissions per bundle identifier, so
-changing it after release resets those permissions for every user. Each user then has to grant
-Location access again before the app can show network names.
+The bundle identifier is `io.github.networkitout.SSIDekick` (in `Support/Info.plist`), based on
+`networkitout.github.io`. Don't change it. macOS keys Location Services and notification permissions,
+and the app's saved settings, to the bundle identifier, so a change resets them for every user. Each
+user would then have to grant Location access again before the app could show network names.
 
 ## App icon
 
