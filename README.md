@@ -1,111 +1,65 @@
 # SSIDekick
 
-A macOS menu bar app (macOS 15+) that shows Wi-Fi quality and connectivity and flags duplicate SSIDs
-(possible evil twins).
+A Mac menu bar app that keeps an eye on your Wi-Fi. It warns you about look-alike networks, shows
+how good your connection is, and checks whether anything is tampering with your traffic.
 
-The project was first called WiFiUtil, and that name remains in the code: the Swift package, its
-targets and some internal labels. Users only see SSIDekick.
+**[Download the latest release](https://github.com/networkitout/SSIDekick/releases/latest)**
 
-## Building for yourself
+## What it does
 
-```bash
-scripts/build-app.sh
-```
+- **Spots look-alike networks.** Flags other networks using your network's name. One of these
+  could be an "evil twin" set up to intercept your traffic.
+- **Shows connection quality.** Signal, noise and channel crowding for the network you're on.
+- **Checks connectivity.** Whether your router, DNS and the internet respond, and how quickly.
+- **Checks for interception.** Warns when DNS answers look tampered with or HTTPS certificates
+  aren't trusted.
+- **Lists nearby networks** in a window, grouped by network name.
+- **Notifies you** when something changes, and **copies a report** you can paste into a message or
+  ticket.
 
-This builds `build/SSIDekick.app` as a universal binary (Apple silicon and Intel), signed with the
-hardened runtime and `Support/SSIDekick.entitlements`. It uses your `Apple Development` identity by
-default; set `SIGN_IDENTITY` to use another one from `security find-identity -v -p codesigning`.
+## Install
 
-A build signed with `Apple Development` runs on your own Mac. Gatekeeper blocks it on other Macs.
+1. Download `SSIDekick-<version>.zip` from the
+   [latest release](https://github.com/networkitout/SSIDekick/releases/latest) and unzip it.
+2. Move `SSIDekick.app` to your Applications folder and open it.
+3. When asked, allow Location access. macOS only shows Wi-Fi network names to apps that have it.
 
-## Releasing to other people's Macs
+Requires macOS 15 or later, on Apple silicon or Intel. The app is signed with Developer ID and
+notarized by Apple.
 
-To run on other Macs without Gatekeeper blocking it, the app must be signed with a
-**Developer ID Application** certificate and **notarized** by Apple. `scripts/release.sh` does both,
-once the one-time setup below is done.
+## Using it
 
-### One-time setup
+- **Left-click** the menu bar icon for the panel: your connection, connectivity checks, and buttons
+  for Nearby networks, Scan now, Copy report, Settings and Quit.
+- **Right-click** (or Control-click) the icon for a short menu with Settings and Quit.
+- The icon changes colour when something needs a look, and turns red for a likely problem.
 
-1. **Join the Apple Developer Program** (paid) with the Apple ID you develop with.
-2. **Create a Developer ID Application certificate**: Xcode > Settings > Accounts > select your team >
-   Manage Certificates > **+** > *Developer ID Application*. Check it is in the keychain:
+In **Settings** you can choose how often to scan, turn off the public IP lookup or the interception
+checks, and have SSIDekick open at login.
 
-   ```bash
-   security find-identity -v -p codesigning
-   ```
+## Permissions and privacy
 
-   The list should include `Developer ID Application: <Your Name> (<TEAMID>)`. Back up the
-   certificate with its private key (export a .p12 from Keychain Access). Without the key you can't
-   sign updates with the same identity.
+- **Location:** used only so macOS reveals Wi-Fi network names and access point addresses.
+  SSIDekick doesn't record or send your location.
+- **Local network:** used to ping your router, query your DNS server, and list devices your Mac
+  already knows on the network.
+- **Notifications:** optional, for alerts when something changes.
 
-   - Only the team's Account Holder can create Developer ID certificates. If the option is greyed
-     out in Xcode, sign in there as the Account Holder, or create the certificate at
-     developer.apple.com > Certificates, IDs & Profiles.
-   - `<TEAMID>` is your 10-character Team ID: the `TeamIdentifier` in `codesign -dv build/SSIDekick.app`
-     or Membership details on developer.apple.com. It is *not* the code in parentheses in an
-     `Apple Development: <Name> (…)` identity, which is a per-person ID.
-   - Don't revoke a Developer ID certificate to recover from a lost key or a new Mac. Revoking it makes
-     Gatekeeper refuse copies already signed with it. Create a new certificate instead (a team can
-     have several) and remove the old one from the keychain once you no longer need it.
-   - An `Apple Development` certificate only signs local builds. Replacing it (for example after a
-     revoke) doesn't affect releases.
-3. **Store notary credentials in the keychain.** Create an app-specific password at
-   [account.apple.com](https://account.apple.com) (Sign-In and Security > App-Specific Passwords),
-   then run:
+To check your connection, SSIDekick contacts:
 
-   ```bash
-   xcrun notarytool store-credentials ssidekick-notary --apple-id "<your Apple ID>" --team-id "<TEAMID>"
-   ```
+- `captive.apple.com`, to see whether the internet is reachable or a login page is in the way.
+- Your DNS server, with a lookup of `apple.com`.
+- `api.ipify.org`, to show your public IP address. You can turn this off in Settings.
+- For the interception checks, every 5 minutes: DNS lookups of `one.one.one.one`, `dns.google` and a
+  random made-up name, and an HTTPS connection to `www.apple.com`. You can turn these off in Settings.
 
-   It prompts for the app-specific password and saves everything in your login keychain under the
-   profile name `ssidekick-notary`. Credentials never go in this repository. To use another profile
-   name, set `NOTARY_PROFILE` when running the release script.
-4. **Keep the bundle identifier** (see below).
+There are no accounts and no analytics, and nothing is sent to the developer. A copied report goes
+only to your clipboard.
 
-### Each release
+## Building from source
 
-1. Bump `CFBundleShortVersionString` (and `CFBundleVersion`) in `Support/Info.plist`.
-2. Run:
-
-   ```bash
-   scripts/release.sh
-   ```
-
-   The script signs with your Developer ID identity (set `SIGN_IDENTITY` if you have more than one),
-   submits to Apple's notary service and waits, staples the ticket to the app, checks it with
-   `spctl`, and prints the path of `build/release/SSIDekick-<version>.zip`. Ship that zip.
-3. If notarization is rejected, the script prints the `xcrun notarytool log …` command that shows why.
-
-A Developer ID build has a different code signature from your local `Apple Development` builds, so
-the first time you run a release build on your own Mac, macOS may ask for Location access again.
-
-### Bundle identifier
-
-The bundle identifier is `io.github.networkitout.SSIDekick` (in `Support/Info.plist`), based on
-`networkitout.github.io`. Don't change it. macOS keys Location Services and notification permissions,
-and the app's saved settings, to the bundle identifier, so a change resets them for every user. Each
-user would then have to grant Location access again before the app could show network names.
-
-## App icon
-
-`Support/AppIcon.icns` is generated by `scripts/make-icon.swift`, which draws the icon in code (no
-SF Symbols, whose license excludes app icons). After changing the drawing, regenerate it and commit
-the `.icns`:
-
-```bash
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift scripts/make-icon.swift
-```
-
-Keep the body on Apple's icon grid (an 824 pt rounded square with 185.4 pt corners on a 1024 pt
-canvas). macOS 26 shows an icon on a grey plate when its outline doesn't match the system shape.
-
-## Entitlements
-
-The app is not sandboxed. Under the hardened runtime it needs a single entitlement,
-`com.apple.security.personal-information.location`, because macOS only reveals Wi-Fi network names
-and BSSIDs to apps with Location access.
+See [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE). `Support/oui.tsv` is generated from the IEEE public MA-L registry by
-`scripts/update-oui.sh`.
+MIT. See [LICENSE](LICENSE).
