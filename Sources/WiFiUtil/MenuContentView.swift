@@ -30,7 +30,8 @@ struct MenuContentView: View {
         .onDisappear { engine.menuOpen = false }
         // Belt-and-braces pending the visual pass: onAppear/onDisappear of a window-style MenuBarExtra are not
         // verified, so the popover's own window also drives menuOpen (key or visible: open; resigned or closed: shut).
-        .background(HostWindowObserver { engine.menuOpen = $0 })
+        .background(HostWindowObserver(onChange: { engine.menuOpen = $0 },
+                                       onWindow: { StatusItemContextMenu.shared.panelWindow = $0 }))
     }
 
     // MARK: Link

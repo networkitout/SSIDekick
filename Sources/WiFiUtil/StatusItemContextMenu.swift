@@ -14,6 +14,9 @@ final class StatusItemContextMenu: NSObject {
     /// SwiftUI's Settings opener, captured from a view in the app's scenes (see `StatusIcon`).
     var openSettings: OpenSettingsAction?
 
+    /// The panel's window, reported by `MenuContentView`; hidden before the menu shows so the two never overlap.
+    weak var panelWindow: NSWindow?
+
     private var monitor: Any?
 
     /// Starts watching clicks; later calls do nothing, so there is only ever one monitor.
@@ -35,6 +38,8 @@ final class StatusItemContextMenu: NSObject {
               let button = window.contentView.flatMap(Self.statusButton(in:))
         else { return false }
 
+        // The swallowed click can't close an open panel, so hide it here, as the panel's own Settings button does.
+        if let panel = panelWindow, panel.isVisible { panel.orderOut(nil) }
         button.highlight(true)
         // Screen coordinates (no view): the menu's top-left sits just under the icon, like other menu bar menus.
         makeMenu().popUp(positioning: nil, at: NSPoint(x: window.frame.minX, y: window.frame.minY - 4), in: nil)
@@ -62,13 +67,15 @@ final class StatusItemContextMenu: NSObject {
         return menu
     }
 
+    /// Same order as the panel's Settings button (open, then activate), which brings Settings to the front in
+    /// this accessory app.
     @objc private func showSettings() {
-        NSApp.activate()
         if let openSettings {
             openSettings()
         } else {
             NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         }
+        NSApp.activate()
     }
 
     @objc private func quit() {

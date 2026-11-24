@@ -14,19 +14,26 @@ final class ScanWindowState {
 
 /// Reports whether the window hosting this view is open: true when it becomes key (or is visible when the view
 /// arrives), false when it resigns key or closes. Used to drive `Engine.menuOpen` from the popover's own window.
+/// `onWindow` is handed the hosting window each time the view moves into one.
 struct HostWindowObserver: NSViewRepresentable {
     let onChange: (Bool) -> Void
+    var onWindow: (NSWindow) -> Void = { _ in }
 
-    func makeNSView(context: Context) -> ObserverView { ObserverView(onChange: onChange) }
+    func makeNSView(context: Context) -> ObserverView { ObserverView(onChange: onChange, onWindow: onWindow) }
 
-    func updateNSView(_ view: ObserverView, context: Context) { view.onChange = onChange }
+    func updateNSView(_ view: ObserverView, context: Context) {
+        view.onChange = onChange
+        view.onWindow = onWindow
+    }
 
     final class ObserverView: NSView {
         var onChange: (Bool) -> Void
+        var onWindow: (NSWindow) -> Void
         private var tokens: [NSObjectProtocol] = []
 
-        init(onChange: @escaping (Bool) -> Void) {
+        init(onChange: @escaping (Bool) -> Void, onWindow: @escaping (NSWindow) -> Void) {
             self.onChange = onChange
+            self.onWindow = onWindow
             super.init(frame: .zero)
         }
 
@@ -42,6 +49,7 @@ struct HostWindowObserver: NSViewRepresentable {
             for token in tokens { NotificationCenter.default.removeObserver(token) }
             tokens = []
             guard let window else { return }
+            onWindow(window)
             let center = NotificationCenter.default
             let report: (Bool) -> Void = { [weak self] open in self?.onChange(open) }
             tokens = [
